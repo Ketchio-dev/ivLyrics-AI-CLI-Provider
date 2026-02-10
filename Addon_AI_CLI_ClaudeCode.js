@@ -2,7 +2,7 @@
  * Claude Code CLI Addon for ivLyrics
  * Anthropic Claude Code CLI를 프록시 서버를 통해 사용
  *
- * @author ivLis STUDIO
+ * @author Ketchio-dev
  * @version 1.0.0
  *
  * 사용하려면:
@@ -16,7 +16,7 @@
     const ADDON_INFO = {
         id: 'cli-claude',
         name: 'Claude Code (CLI)',
-        author: 'ivLis STUDIO',
+        author: 'Ketchio-dev',
         description: {
             ko: 'Anthropic Claude Code CLI를 프록시 서버를 통해 사용',
             en: 'Use Anthropic Claude Code CLI via proxy server',

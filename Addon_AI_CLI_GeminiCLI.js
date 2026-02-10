@@ -2,7 +2,7 @@
  * Gemini CLI Addon for ivLyrics
  * Google Gemini CLI를 프록시 서버를 통해 사용
  *
- * @author ivLis STUDIO
+ * @author Ketchio-dev
  * @version 1.0.0
  *
  * 사용하려면:
@@ -16,7 +16,7 @@
     const ADDON_INFO = {
         id: 'cli-gemini',
         name: 'Gemini CLI (Google)',
-        author: 'ivLis STUDIO',
+        author: 'Ketchio-dev',
         description: {
             ko: 'Google Gemini CLI를 프록시 서버를 통해 사용',
             en: 'Use Google Gemini CLI via proxy server',
