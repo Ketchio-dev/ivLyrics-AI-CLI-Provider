@@ -215,10 +215,12 @@ async function geminiGenerateContent(prompt, model) {
                     request: buildGeminiGenerateRequest(prompt, false),
                 }),
             });
-        }
-        if (!response.ok) {
-            const retryErrorBody = await response.text();
-            throw new Error(`Gemini API error ${response.status}: ${retryErrorBody}`);
+            if (!response.ok) {
+                const retryErrorBody = await response.text();
+                throw new Error(`Gemini API error ${response.status}: ${retryErrorBody}`);
+            }
+        } else {
+            throw new Error(`Gemini API error ${response.status}: ${errorBody}`);
         }
     }
 
