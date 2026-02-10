@@ -1157,11 +1157,19 @@ app.post('/update', async (req, res) => {
             }
         }
 
+        let needsRestart = false;
+
         if (target === 'proxy' || target === 'all') {
             const serverLocalPath = path.join(__dirname, 'server.js');
+            const pkgLocalPath = path.join(__dirname, 'package.json');
             const result = await downloadFile('cli-proxy/server.js', serverLocalPath, 'server.js');
             results.push(result);
-            results.push({ file: 'proxy', status: 'updated', note: 'Restart server to apply' });
+            try {
+                const pkgResult = await downloadFile('cli-proxy/package.json', pkgLocalPath, 'package.json');
+                results.push(pkgResult);
+            } catch {}
+            needsRestart = true;
+            results.push({ file: 'proxy', status: 'updated', note: 'Server will restart automatically' });
         }
 
         // Single file target
@@ -1179,6 +1187,23 @@ app.post('/update', async (req, res) => {
         updateCache = { data: null, ts: 0 };
 
         res.json({ success: true, results });
+
+        // Auto-restart after proxy update
+        if (needsRestart) {
+            console.log('[update] Proxy updated. Restarting server in 1 second...');
+            setTimeout(() => {
+                const { execSync } = require('child_process');
+                const serverPath = path.join(__dirname, 'server.js');
+                const child = spawn(process.execPath, [serverPath], {
+                    stdio: 'ignore',
+                    detached: true,
+                    env: { ...process.env },
+                    cwd: __dirname,
+                });
+                child.unref();
+                process.exit(0);
+            }, 1000);
+        }
     } catch (e) {
         console.error('[update] Error:', e.message);
         res.status(500).json({ error: e.message });
