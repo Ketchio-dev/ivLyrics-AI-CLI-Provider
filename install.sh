@@ -8,11 +8,13 @@ REPO_BASE="https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 SPICETIFY_CONFIG="$HOME/.config/spicetify"
 IVLYRICS_APP="$SPICETIFY_CONFIG/CustomApps/ivLyrics"
 IVLYRICS_DATA="$SPICETIFY_CONFIG/ivLyrics"
+CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
 MANIFEST="$IVLYRICS_APP/manifest.json"
 ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
 
 ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
 ADDON_LABELS="Claude Code;Codex CLI;Gemini CLI"
+PROXY_FILES="server.js package.json spotify-with-proxy.sh .env.example"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -197,6 +199,75 @@ install_all() {
     done
 }
 
+# ── proxy server install ────────────────────────────────────────────────────
+
+install_proxy() {
+    if [ -f "$CLI_PROXY_DIR/server.js" ] && [ -f "$CLI_PROXY_DIR/package.json" ]; then
+        info "Proxy server already installed at $CLI_PROXY_DIR"
+        printf "  Reinstall / update? (y/N): "
+        read -r reinstall
+        case "$reinstall" in
+            y|Y|yes|YES) ;;
+            *) info "Skipping proxy server install."; return 0 ;;
+        esac
+    fi
+
+    if ! command -v node >/dev/null 2>&1; then
+        err "Node.js is required but not found."
+        err "Install from: https://nodejs.org/"
+        return 1
+    fi
+
+    if ! command -v npm >/dev/null 2>&1; then
+        err "npm is required but not found."
+        return 1
+    fi
+
+    mkdir -p "$CLI_PROXY_DIR"
+
+    info "Downloading proxy server files..."
+    for file in $PROXY_FILES; do
+        if ! curl -fsSL "$REPO_BASE/cli-proxy/$file" -o "$CLI_PROXY_DIR/$file"; then
+            err "Failed to download $file"
+            return 1
+        fi
+    done
+    chmod +x "$CLI_PROXY_DIR/spotify-with-proxy.sh"
+    ok "Downloaded proxy server → $CLI_PROXY_DIR"
+
+    info "Installing dependencies (npm install)..."
+    if (cd "$CLI_PROXY_DIR" && npm install --silent); then
+        ok "Dependencies installed"
+    else
+        err "npm install failed"
+        return 1
+    fi
+
+    echo ""
+    ok "Proxy server installed!"
+    echo ""
+    info "To start the server:"
+    echo "  cd $CLI_PROXY_DIR && npm start"
+    echo ""
+    info "To auto-start with Spotify (macOS):"
+    echo "  $CLI_PROXY_DIR/spotify-with-proxy.sh"
+}
+
+ask_install_proxy() {
+    echo ""
+    echo "────────────────────────────────────────"
+    info "Proxy server is required for addons to work."
+    if [ -f "$CLI_PROXY_DIR/server.js" ]; then
+        info "(Proxy server is already installed at $CLI_PROXY_DIR)"
+    fi
+    printf "  Install proxy server? (Y/n): "
+    read -r answer
+    case "$answer" in
+        n|N|no|NO) info "Skipping proxy server. You can install it later manually." ;;
+        *) install_proxy ;;
+    esac
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -210,10 +281,16 @@ main() {
         echo "Usage: bash install.sh [OPTIONS]"
         echo ""
         echo "Options:"
-        echo "  (no args)     Interactive selection menu"
-        echo "  --all, -a     Install all addons"
-        echo "  --help, -h    Show this help"
-        echo "  <URL>         Install addon from URL"
+        echo "  (no args)       Interactive selection menu"
+        echo "  --all, -a       Install all addons"
+        echo "  --proxy-only    Install proxy server only (skip addons)"
+        echo "  --help, -h      Show this help"
+        echo "  <URL>           Install addon from URL"
+        exit 0
+    elif [ "$1" = "--proxy-only" ]; then
+        install_proxy
+        echo ""
+        ok "Installation complete!"
         exit 0
     else
         # treat each argument as a URL
@@ -232,6 +309,15 @@ main() {
         fi
     else
         warn "Run 'spicetify apply' manually to activate the addons."
+    fi
+
+    # stdin이 터미널일 때만 프록시 서버 설치를 물어봄 (파이프 실행 시 스킵)
+    if [ -t 0 ]; then
+        ask_install_proxy
+    else
+        echo ""
+        info "Proxy server was not installed (non-interactive mode)."
+        info "To install manually: cd ~/.config/spicetify/cli-proxy && npm install"
     fi
 
     echo ""
