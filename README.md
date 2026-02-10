@@ -213,7 +213,7 @@ npm start
 정상적으로 실행되면 아래와 같은 출력이 나타납니다:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.0.0
+🚀 ivLyrics CLI Proxy Server v2.1.0
    Running on http://localhost:19284
 
 🔧 Checking available tools...
@@ -292,6 +292,62 @@ Add-Content $PROFILE 'function spotify { & "$env:APPDATA\spicetify\cli-proxy\spo
 # 새 PowerShell 창에서:
 spotify
 ```
+
+## API Endpoints
+
+프록시 서버는 다음 엔드포인트를 제공합니다:
+
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/health` | 서버 상태 및 사용 가능한 도구 목록 확인 |
+| GET | `/tools` | 사용 가능한 CLI 도구 목록 |
+| GET | `/models` | 도구별 사용 가능한 모델 목록 |
+| POST | `/generate` | AI 텍스트 생성 (SSE 스트리밍 지원) |
+| GET | `/updates` | 업데이트 확인 |
+| POST | `/update` | 파일 업데이트 다운로드 및 적용 |
+| POST | `/v1/chat/completions` | OpenAI API 호환 엔드포인트 |
+
+### SSE 스트리밍
+
+`/generate` 엔드포인트는 SSE(Server-Sent Events) 스트리밍을 지원합니다. `stream: true`를 요청 body에 추가하면 점진적 응답을 받을 수 있습니다:
+
+```bash
+# 스트리밍 요청
+curl -N -X POST http://localhost:19284/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"tool":"claude","prompt":"Say hello","stream":true}'
+
+# 일반 요청 (역호환)
+curl -X POST http://localhost:19284/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"tool":"claude","prompt":"Say hello"}'
+```
+
+SSE 프로토콜:
+```
+data: {"chunk":"partial text"}\n\n     # 텍스트 청크
+data: {"error":"message"}\n\n          # 에러 (발생 시)
+data: [DONE]\n\n                       # 종료 신호
+```
+
+### 자동 업데이트
+
+서버 시작 시 GitHub에서 최신 버전을 자동으로 확인합니다. 수동으로도 확인할 수 있습니다:
+
+```bash
+# 업데이트 확인
+curl http://localhost:19284/updates
+
+# 강제 재확인 (캐시 무시)
+curl http://localhost:19284/updates?force=1
+
+# 애드온 업데이트 적용
+curl -X POST http://localhost:19284/update \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"addons"}'
+```
+
+`target` 옵션: `addons`, `proxy`, `all`, 또는 개별 파일명 (예: `Addon_AI_CLI_ClaudeCode.js`)
 
 ## License
 

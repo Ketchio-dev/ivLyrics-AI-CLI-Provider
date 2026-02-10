@@ -20,19 +20,28 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// 사용자 로그인 셸에서 전체 PATH 가져오기 (GUI/서비스 환경에서 PATH가 제한될 수 있음)
+// GUI/서비스 환경에서 PATH가 제한될 수 있으므로 주요 사용자 바이너리 경로를 추가
 function expandPath() {
-    const extraDirs = [
-        path.join(os.homedir(), '.local', 'bin'),
-        path.join(os.homedir(), '.cargo', 'bin'),
-        '/opt/homebrew/bin',
-        '/usr/local/bin',
-    ];
+    const home = os.homedir();
+    const isWin = process.platform === 'win32';
+    const extraDirs = isWin
+        ? [
+            path.join(home, '.local', 'bin'),
+            path.join(home, '.cargo', 'bin'),
+            path.join(process.env.APPDATA || '', 'npm'),
+            path.join(process.env.LOCALAPPDATA || '', 'Programs', 'nodejs'),
+        ]
+        : [
+            path.join(home, '.local', 'bin'),
+            path.join(home, '.cargo', 'bin'),
+            '/opt/homebrew/bin',
+            '/usr/local/bin',
+        ];
     const currentPath = process.env.PATH || '';
-    const currentDirs = new Set(currentPath.split(':'));
-    const missing = extraDirs.filter(d => !currentDirs.has(d) && fs.existsSync(d));
+    const currentDirs = new Set(currentPath.split(path.delimiter));
+    const missing = extraDirs.filter(d => d && !currentDirs.has(d) && fs.existsSync(d));
     if (missing.length > 0) {
-        process.env.PATH = missing.join(':') + ':' + currentPath;
+        process.env.PATH = missing.join(path.delimiter) + path.delimiter + currentPath;
     }
 }
 expandPath();
@@ -57,6 +66,103 @@ loadEnv();
 
 const app = express();
 const PORT = process.env.PORT || 19284;
+
+// ============================================
+// Version & Auto-Update
+// ============================================
+
+const LOCAL_VERSION = '2.1.0';
+const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
+const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
+
+let updateCache = { data: null, ts: 0 };
+const UPDATE_CACHE_TTL_MS = 3600000; // 1 hour
+
+function isNewerVersion(remote, local) {
+    const r = (remote || '0.0.0').split('.').map(Number);
+    const l = (local || '0.0.0').split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+        if ((r[i] || 0) > (l[i] || 0)) return true;
+        if ((r[i] || 0) < (l[i] || 0)) return false;
+    }
+    return false;
+}
+
+function extractLocalAddonVersion(filePath) {
+    try {
+        if (!fs.existsSync(filePath)) return null;
+        const content = fs.readFileSync(filePath, 'utf8');
+        const match = content.match(/version:\s*['"]([^'"]+)['"]/);
+        return match ? match[1] : null;
+    } catch {
+        return null;
+    }
+}
+
+function getSpicetifyAddonDir() {
+    const isWin = process.platform === 'win32';
+    if (isWin) {
+        return path.join(process.env.APPDATA || '', 'spicetify', 'CustomApps', 'ivLyrics');
+    }
+    return path.join(os.homedir(), '.config', 'spicetify', 'CustomApps', 'ivLyrics');
+}
+
+async function checkForUpdates(force = false) {
+    const now = Date.now();
+    if (!force && updateCache.data && (now - updateCache.ts) < UPDATE_CACHE_TTL_MS) {
+        return updateCache.data;
+    }
+
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const response = await fetch(VERSION_CHECK_URL, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const remoteManifest = await response.json();
+        const result = { proxy: null, addons: {} };
+
+        // Check proxy version
+        const remoteProxyVersion = remoteManifest?.proxy?.version;
+        if (remoteProxyVersion && isNewerVersion(remoteProxyVersion, LOCAL_VERSION)) {
+            result.proxy = {
+                current: LOCAL_VERSION,
+                latest: remoteProxyVersion,
+                updateAvailable: true
+            };
+        }
+
+        // Check addon versions
+        const addonDir = getSpicetifyAddonDir();
+        const addons = remoteManifest?.addons || {};
+        for (const [filename, info] of Object.entries(addons)) {
+            const localPath = path.join(addonDir, filename);
+            const localVersion = extractLocalAddonVersion(localPath);
+            const remoteVersion = info?.version;
+            if (remoteVersion && localVersion && isNewerVersion(remoteVersion, localVersion)) {
+                result.addons[filename] = {
+                    current: localVersion,
+                    latest: remoteVersion,
+                    id: info.id || null,
+                    updateAvailable: true
+                };
+            }
+        }
+
+        result.hasUpdates = !!(result.proxy || Object.keys(result.addons).length > 0);
+        result.checkedAt = new Date().toISOString();
+
+        updateCache = { data: result, ts: now };
+        return result;
+    } catch (e) {
+        console.warn('[update] Failed to check for updates:', e.message);
+        return { hasUpdates: false, error: e.message, checkedAt: new Date().toISOString() };
+    }
+}
 
 // CORS 전면 허용 (서버는 127.0.0.1에만 바인딩하여 외부 접근 차단)
 app.use(cors());
@@ -709,6 +815,160 @@ async function runTool(toolId, prompt, model = '', timeout = 120000) {
 }
 
 // ============================================
+// SSE Streaming Functions
+// ============================================
+
+/**
+ * SSE 헤더 설정
+ */
+function setupSSE(res) {
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders();
+}
+
+/**
+ * SSE 청크 전송
+ */
+function sendSSEChunk(res, chunk) {
+    res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+}
+
+/**
+ * SSE 에러 전송
+ */
+function sendSSEError(res, message) {
+    res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+}
+
+/**
+ * SSE 종료 신호 전송
+ */
+function sendSSEDone(res) {
+    res.write('data: [DONE]\n\n');
+    res.end();
+}
+
+/**
+ * CLI 도구 SSE 스트리밍 실행
+ */
+function runCLIStream(toolId, prompt, model, timeout, res) {
+    const tool = CLI_TOOLS[toolId];
+    if (!tool) {
+        sendSSEError(res, `Unknown tool: ${toolId}`);
+        sendSSEDone(res);
+        return;
+    }
+
+    const args = tool.buildArgs(prompt, model, tool.defaultModel);
+    const actualModel = model || tool.defaultModel || 'default';
+
+    const promptPreview = prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt;
+    const argsForLog = args.map(a => a === prompt ? `"${promptPreview}"` : a);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`[${toolId}] CLI STREAM REQUEST`);
+    console.log(`  Model: ${actualModel}`);
+    console.log(`  Command: ${tool.command} ${argsForLog.join(' ')}`);
+    console.log(`${'='.repeat(60)}`);
+
+    const proc = spawn(tool.command, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: os.tmpdir(),
+        env: { ...process.env, NO_COLOR: '1' }
+    });
+
+    let stderr = '';
+    let settled = false;
+    let totalLength = 0;
+
+    const timer = setTimeout(() => {
+        if (!settled) {
+            settled = true;
+            proc.kill('SIGKILL');
+            sendSSEError(res, `Timeout after ${timeout}ms`);
+            sendSSEDone(res);
+        }
+    }, timeout);
+
+    // Client disconnect → kill process
+    res.on('close', () => {
+        if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            proc.kill('SIGKILL');
+        }
+    });
+
+    proc.stdout.on('data', (data) => {
+        if (settled) return;
+        const text = data.toString();
+        totalLength += text.length;
+        sendSSEChunk(res, text);
+    });
+
+    proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+    });
+
+    proc.on('close', (code) => {
+        clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        if (code !== 0) {
+            console.log(`[${toolId}] STREAM FAILED - Exit code: ${code}`);
+            sendSSEError(res, stderr || `Process exited with code ${code}`);
+        } else {
+            console.log(`[${toolId}] STREAM SUCCESS - Total: ${totalLength} chars`);
+        }
+        sendSSEDone(res);
+    });
+
+    proc.on('error', (err) => {
+        clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        sendSSEError(res, `Failed to start ${tool.command}: ${err.message}`);
+        sendSSEDone(res);
+    });
+}
+
+/**
+ * SDK 도구 SSE 스트리밍 (SDK는 스트리밍 미지원 → 단일 chunk)
+ */
+async function runSDKStream(toolId, prompt, model, timeout, res) {
+    try {
+        const result = await runSDK(toolId, prompt, model, timeout);
+        sendSSEChunk(res, result);
+        sendSSEDone(res);
+    } catch (e) {
+        sendSSEError(res, e.message);
+        sendSSEDone(res);
+    }
+}
+
+/**
+ * 통합 스트리밍 디스패처
+ */
+function runToolStream(toolId, prompt, model, timeout, res) {
+    const tool = CLI_TOOLS[toolId];
+    if (!tool) {
+        sendSSEError(res, `Unknown tool: ${toolId}`);
+        sendSSEDone(res);
+        return;
+    }
+
+    if (tool.mode === 'sdk') {
+        runSDKStream(toolId, prompt, model, timeout, res);
+    } else {
+        runCLIStream(toolId, prompt, model, timeout, res);
+    }
+}
+
+// ============================================
 // API Endpoints
 // ============================================
 
@@ -729,10 +989,13 @@ app.get('/health', async (req, res) => {
         tools[toolId] = { ...status, mode: CLI_TOOLS[toolId].mode };
     });
 
+    const updateInfo = updateCache.data || {};
     res.json({
         status: 'ok',
-        version: '2.0.0',
-        tools
+        version: LOCAL_VERSION,
+        tools,
+        updateAvailable: updateInfo.hasUpdates || false,
+        latestVersion: updateInfo.proxy?.latest || LOCAL_VERSION
     });
 });
 
@@ -793,7 +1056,8 @@ app.get('/models', async (req, res) => {
  * 특정 도구로 프롬프트 실행
  */
 app.post('/generate', async (req, res) => {
-    const { tool, model, prompt, timeout } = req.body;
+    const { tool, model, prompt, timeout, stream } = req.body;
+    const streamEnabled = stream === true || stream === 'true' || req.query.stream === 'true';
 
     if (!tool || !prompt) {
         return res.status(400).json({ error: 'Missing tool or prompt' });
@@ -804,10 +1068,19 @@ app.post('/generate', async (req, res) => {
         return res.status(400).json({ error: toolStatus.error });
     }
 
+    const effectiveTimeout = timeout || 120000;
+
+    if (streamEnabled) {
+        console.log(`[API] Stream request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${model || 'default'}, prompt length: ${prompt.length}`);
+        setupSSE(res);
+        runToolStream(tool, prompt, model || '', effectiveTimeout, res);
+        return;
+    }
+
     try {
         console.log(`[API] Generate request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${model || 'default'}, prompt length: ${prompt.length}`);
         const startTime = Date.now();
-        const result = await runTool(tool, prompt, model || '', timeout || 120000);
+        const result = await runTool(tool, prompt, model || '', effectiveTimeout);
         const elapsed = Date.now() - startTime;
         console.log(`[API] Completed in ${elapsed}ms`);
         res.json({
@@ -820,6 +1093,94 @@ app.post('/generate', async (req, res) => {
         });
     } catch (e) {
         console.error(`[API] Error:`, e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * 업데이트 확인
+ */
+app.get('/updates', async (req, res) => {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    try {
+        const result = await checkForUpdates(force);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * 파일 업데이트 실행
+ */
+app.post('/update', async (req, res) => {
+    const { target } = req.body;
+    if (!target) {
+        return res.status(400).json({ error: 'Missing target (addons, proxy, all, or filename)' });
+    }
+
+    try {
+        const results = [];
+
+        const downloadFile = async (remotePath, localPath, label) => {
+            const url = `${GITHUB_RAW_BASE}/${remotePath}`;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeoutId);
+            if (!response.ok) {
+                throw new Error(`Failed to download ${label}: HTTP ${response.status}`);
+            }
+            const content = await response.text();
+            const dir = path.dirname(localPath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            fs.writeFileSync(localPath, content, 'utf8');
+            return { file: label, status: 'updated' };
+        };
+
+        const addonDir = getSpicetifyAddonDir();
+        const addonFiles = [
+            'Addon_AI_CLI_ClaudeCode.js',
+            'Addon_AI_CLI_CodexCLI.js',
+            'Addon_AI_CLI_GeminiCLI.js'
+        ];
+
+        if (target === 'addons' || target === 'all') {
+            for (const filename of addonFiles) {
+                const localPath = path.join(addonDir, filename);
+                if (fs.existsSync(localPath)) {
+                    const result = await downloadFile(filename, localPath, filename);
+                    results.push(result);
+                }
+            }
+        }
+
+        if (target === 'proxy' || target === 'all') {
+            const serverLocalPath = path.join(__dirname, 'server.js');
+            const result = await downloadFile('cli-proxy/server.js', serverLocalPath, 'server.js');
+            results.push(result);
+            results.push({ file: 'proxy', status: 'updated', note: 'Restart server to apply' });
+        }
+
+        // Single file target
+        if (addonFiles.includes(target)) {
+            const localPath = path.join(addonDir, target);
+            const result = await downloadFile(target, localPath, target);
+            results.push(result);
+        }
+
+        if (results.length === 0) {
+            return res.status(400).json({ error: `Unknown target: ${target}` });
+        }
+
+        // Invalidate cache
+        updateCache = { data: null, ts: 0 };
+
+        res.json({ success: true, results });
+    } catch (e) {
+        console.error('[update] Error:', e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -870,13 +1231,15 @@ app.post('/v1/chat/completions', async (req, res) => {
 // ============================================
 
 app.listen(PORT, '127.0.0.1', () => {
-    console.log(`\n🚀 ivLyrics CLI Proxy Server v2.0.0`);
+    console.log(`\n🚀 ivLyrics CLI Proxy Server v${LOCAL_VERSION}`);
     console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
     console.log(`\n📋 Available endpoints:`);
     console.log(`   GET  /health   - Check server status and available tools`);
     console.log(`   GET  /tools    - List available CLI tools`);
     console.log(`   GET  /models   - List available models per tool`);
-    console.log(`   POST /generate - Generate text with a CLI tool`);
+    console.log(`   POST /generate - Generate text (supports ?stream=true for SSE)`);
+    console.log(`   GET  /updates  - Check for available updates`);
+    console.log(`   POST /update   - Download and apply updates`);
     console.log(`   POST /v1/chat/completions - OpenAI-compatible endpoint`);
     console.log(`\n🔧 Checking available tools...`);
 
@@ -889,6 +1252,20 @@ app.listen(PORT, '127.0.0.1', () => {
             console.log(`   ${icon} ${toolId} ${modeTag}: ${status.available ? 'available' : status.error} (default: ${tool.defaultModel || 'auto'})`);
         })
     ).then(() => {
-        console.log(`\n`);
+        console.log('');
     });
+
+    // Async update check on startup
+    checkForUpdates().then((result) => {
+        if (result.hasUpdates) {
+            console.log('📦 Updates available:');
+            if (result.proxy) {
+                console.log(`   Proxy: ${result.proxy.current} → ${result.proxy.latest}`);
+            }
+            for (const [filename, info] of Object.entries(result.addons || {})) {
+                console.log(`   ${filename}: ${info.current} → ${info.latest}`);
+            }
+            console.log('   Run GET /updates for details\n');
+        }
+    }).catch(() => {});
 });

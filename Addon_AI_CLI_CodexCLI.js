@@ -3,7 +3,7 @@
  * OpenAI Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 1.0.0
+ * @version 1.1.0
  *
  * 사용하려면:
  * 1. ~/.config/spicetify/cli-proxy 폴더에서 npm install && npm start
@@ -23,7 +23,7 @@
             ja: 'OpenAI Codex CLIをプロキシサーバー経由で使用',
             'zh-CN': '通过代理服务器使用 OpenAI Codex CLI',
         },
-        version: '1.0.0',
+        version: '1.1.0',
         supports: {
             translate: true,
             metadata: true,
@@ -242,7 +242,87 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         }
     }
 
-    async function callProxy(prompt, maxRetries = 2) {
+    async function callProxyStream(prompt, maxRetries = 2) {
+        const proxyUrl = getProxyUrl();
+        const model = getSelectedModel();
+        let lastError = null;
+
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                const response = await fetch(`${proxyUrl}/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tool: TOOL_ID,
+                        model,
+                        prompt,
+                        timeout: 120000,
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.includes('text/event-stream')) {
+                    const data = await response.json();
+                    if (!data.success || !data.result) {
+                        throw new Error(data.error || 'Empty response from CLI');
+                    }
+                    return data.result;
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let accumulated = '';
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const payload = line.slice(6);
+                        if (payload === '[DONE]') continue;
+                        try {
+                            const parsed = JSON.parse(payload);
+                            if (parsed.error) throw new Error(parsed.error);
+                            if (parsed.chunk) accumulated += parsed.chunk;
+                        } catch (e) {
+                            if (e.message && !e.message.includes('JSON')) throw e;
+                        }
+                    }
+                }
+
+                if (!accumulated) throw new Error('Empty response from stream');
+                return accumulated;
+
+            } catch (e) {
+                lastError = e;
+                console.warn(`[Codex CLI] Stream attempt ${attempt + 1} failed:`, e.message);
+
+                if (e.message.includes('not running') || e.message.includes('ECONNREFUSED')) {
+                    throw new Error(`[Codex CLI] Server not running. Start with: cd cli-proxy && npm start`);
+                }
+
+                if (attempt < maxRetries - 1) {
+                    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                }
+            }
+        }
+
+        throw lastError || new Error('[Codex CLI] All retries exhausted');
+    }
+
+    async function callProxyLegacy(prompt, maxRetries = 2) {
         const proxyUrl = getProxyUrl();
         const model = getSelectedModel();
         let lastError = null;
@@ -289,6 +369,53 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         throw lastError || new Error('[Codex CLI] All retries exhausted');
     }
 
+    async function callProxy(prompt, maxRetries = 2) {
+        try {
+            return await callProxyStream(prompt, maxRetries);
+        } catch (e) {
+            console.warn('[Codex CLI] Stream failed, falling back to legacy:', e.message);
+            return await callProxyLegacy(prompt, maxRetries);
+        }
+    }
+
+    let updateCheckCache = { data: null, ts: 0 };
+    const ADDON_UPDATE_CHECK_TTL = 3600000;
+
+    async function checkAddonUpdate(force = false) {
+        const now = Date.now();
+        if (!force && updateCheckCache.data && (now - updateCheckCache.ts) < ADDON_UPDATE_CHECK_TTL) {
+            return updateCheckCache.data;
+        }
+
+        try {
+            const proxyUrl = getProxyUrl();
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const response = await fetch(`${proxyUrl}/updates${force ? '?force=1' : ''}`, {
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            if (!response.ok) return null;
+            const data = await response.json();
+            updateCheckCache = { data, ts: now };
+
+            if (data.hasUpdates) {
+                const addonUpdate = data.addons?.['Addon_AI_CLI_CodexCLI.js'];
+                if (addonUpdate?.updateAvailable) {
+                    Spicetify.showNotification?.(
+                        `Codex CLI: Update available (${addonUpdate.current} → ${addonUpdate.latest})`,
+                        false, 5000
+                    );
+                }
+            }
+
+            return data;
+        } catch {
+            return null;
+        }
+    }
+
     function parseTextLines(text, expectedLineCount) {
         let cleaned = text.replace(/```[a-z]*\s*/gi, '').replace(/```\s*/g, '').trim();
         const lines = cleaned.split('\n');
@@ -333,6 +460,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
         async init() {
             console.log(`[Codex CLI] Initialized (v${ADDON_INFO.version})`);
+            checkAddonUpdate().catch(() => {});
         },
 
         async testConnection() {
@@ -415,6 +543,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     setSetting('model', value);
                 }, []);
 
+                const [updateStatus, setUpdateStatus] = useState('');
+
                 const handleTest = useCallback(async () => {
                     setTestStatus('Testing...');
                     try {
@@ -422,6 +552,26 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         setTestStatus('✓ Connection successful!');
                     } catch (e) {
                         setTestStatus(`✗ ${e.message}`);
+                    }
+                }, []);
+
+                const handleCheckUpdate = useCallback(async () => {
+                    setUpdateStatus('Checking...');
+                    try {
+                        const result = await checkAddonUpdate(true);
+                        if (!result) {
+                            setUpdateStatus('✗ Could not reach server');
+                        } else if (result.hasUpdates) {
+                            const parts = [];
+                            if (result.proxy) parts.push(`Proxy: ${result.proxy.current} → ${result.proxy.latest}`);
+                            const addonInfo = result.addons?.['Addon_AI_CLI_CodexCLI.js'];
+                            if (addonInfo) parts.push(`Addon: ${addonInfo.current} → ${addonInfo.latest}`);
+                            setUpdateStatus(`Updates available: ${parts.join(', ') || 'See /updates'}`);
+                        } else {
+                            setUpdateStatus('✓ Everything is up to date');
+                        }
+                    } catch (e) {
+                        setUpdateStatus(`✗ ${e.message}`);
                     }
                 }, []);
 
@@ -561,6 +711,16 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         testStatus && React.createElement('span', {
                             className: `ai-addon-test-status ${testStatus.startsWith('✓') ? 'success' : testStatus.startsWith('✗') ? 'error' : ''}`
                         }, testStatus)
+                    ),
+
+                    React.createElement('div', { className: 'ai-addon-setting' },
+                        React.createElement('button', {
+                            onClick: handleCheckUpdate,
+                            className: 'ai-addon-btn-secondary'
+                        }, 'Check for Updates'),
+                        updateStatus && React.createElement('span', {
+                            className: `ai-addon-test-status ${updateStatus.startsWith('✓') ? 'success' : updateStatus.startsWith('✗') ? 'error' : ''}`
+                        }, updateStatus)
                     )
                 );
             };
