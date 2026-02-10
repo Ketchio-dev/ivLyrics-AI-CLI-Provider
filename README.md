@@ -28,6 +28,31 @@
 
 ### macOS / Linux (Terminal)
 
+**install.sh 사용 (권장)**
+
+```bash
+# 리포지토리 클론 후 설치 스크립트 실행
+git clone https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider.git
+cd ivLyrics-AI-CLI-Provider
+bash install.sh          # 대화형 선택 메뉴
+bash install.sh --all    # 3개 전부 설치
+```
+
+또는 원격으로 바로 실행:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --all
+```
+
+개별 애드온만 설치:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_ClaudeCode.js"
+```
+
+<details>
+<summary>공식 addon-manager.sh 사용</summary>
+
 ```bash
 # Claude Code
 curl -fsSL https://ivlis.kr/ivLyrics/addon-manager.sh | bash -s -- "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_ClaudeCode.js"
@@ -37,6 +62,36 @@ curl -fsSL https://ivlis.kr/ivLyrics/addon-manager.sh | bash -s -- "https://raw.
 
 # Gemini CLI
 curl -fsSL https://ivlis.kr/ivLyrics/addon-manager.sh | bash -s -- "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_GeminiCLI.js"
+```
+
+> **참고:** 공식 `addon-manager.sh`는 `declare -A` (bash 4+)를 사용하므로 macOS 기본 bash (3.2)에서는 파일 다운로드 후 `addon_sources.json` 저장과 `manifest.json` 등록이 실패할 수 있습니다. macOS에서 문제가 발생하면 위의 `install.sh`를 사용하세요.
+
+</details>
+
+### 수동 설치
+
+스크립트 없이 직접 설치하는 방법:
+
+```bash
+IVLYRICS_DIR="$HOME/.config/spicetify/CustomApps/ivLyrics"
+
+# 1. JS 파일 다운로드
+curl -fsSL -o "$IVLYRICS_DIR/Addon_AI_CLI_ClaudeCode.js" \
+  "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_ClaudeCode.js"
+curl -fsSL -o "$IVLYRICS_DIR/Addon_AI_CLI_CodexCLI.js" \
+  "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_CodexCLI.js"
+curl -fsSL -o "$IVLYRICS_DIR/Addon_AI_CLI_GeminiCLI.js" \
+  "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_GeminiCLI.js"
+
+# 2. manifest.json의 "subfiles_extension" 배열에 추가 (이미 없는 경우)
+#    에디터로 $IVLYRICS_DIR/manifest.json 을 열고
+#    "subfiles_extension": [ 바로 아래에 다음 3줄 추가:
+#        "Addon_AI_CLI_ClaudeCode.js",
+#        "Addon_AI_CLI_CodexCLI.js",
+#        "Addon_AI_CLI_GeminiCLI.js",
+
+# 3. 적용
+spicetify apply
 ```
 
 ## 사전 요구사항
