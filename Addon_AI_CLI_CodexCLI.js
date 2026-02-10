@@ -2,7 +2,7 @@
  * Codex CLI Addon for ivLyrics
  * OpenAI Codex CLI를 프록시 서버를 통해 사용
  *
- * @author ivLis STUDIO
+ * @author Ketchio-dev
  * @version 1.0.0
  *
  * 사용하려면:
@@ -16,7 +16,7 @@
     const ADDON_INFO = {
         id: 'cli-codex',
         name: 'Codex CLI (OpenAI)',
-        author: 'ivLis STUDIO',
+        author: 'Ketchio-dev',
         description: {
             ko: 'OpenAI Codex CLI를 프록시 서버를 통해 사용',
             en: 'Use OpenAI Codex CLI via proxy server',
