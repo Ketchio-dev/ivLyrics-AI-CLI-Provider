@@ -14,7 +14,7 @@ ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
 
 ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
 ADDON_LABELS="Claude Code;Codex CLI;Gemini CLI"
-PROXY_FILES="server.js package.json spotify-with-proxy.sh .env.example"
+PROXY_FILES="server.js package.json spotify-with-proxy.sh spotify-with-proxy.ps1 .env.example"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

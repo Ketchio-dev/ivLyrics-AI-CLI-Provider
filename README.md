@@ -15,6 +15,25 @@
 
 ### Windows (PowerShell)
 
+**install.ps1 사용 (권장)**
+
+```powershell
+# 리포지토리 클론 후 설치 스크립트 실행
+git clone https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider.git
+cd ivLyrics-AI-CLI-Provider
+.\install.ps1          # 대화형 선택 메뉴
+.\install.ps1 -All     # 3개 전부 설치
+```
+
+또는 프록시 서버만 별도 설치:
+
+```powershell
+.\install.ps1 -ProxyOnly
+```
+
+<details>
+<summary>공식 addon-manager.ps1 사용</summary>
+
 ```powershell
 # Claude Code
 & ([scriptblock]::Create((iwr -useb https://ivlis.kr/ivLyrics/addon-manager.ps1).Content)) -url "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_ClaudeCode.js"
@@ -25,6 +44,10 @@
 # Gemini CLI
 & ([scriptblock]::Create((iwr -useb https://ivlis.kr/ivLyrics/addon-manager.ps1).Content)) -url "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_GeminiCLI.js"
 ```
+
+> **참고:** 공식 `addon-manager.ps1`은 프록시 서버를 설치하지 않습니다. 애드온 설치 후 반드시 프록시 서버를 별도 설치해야 합니다.
+
+</details>
 
 ### macOS / Linux (Terminal)
 
@@ -107,10 +130,15 @@ spicetify apply
 
 애드온은 직접 AI CLI를 실행할 수 없기 때문에 로컬 프록시 서버가 중간에서 요청을 전달합니다. **애드온 설치 후 반드시 프록시 서버를 설치해야 합니다.**
 
-> **주의:** 프록시 서버는 반드시 `~/.config/spicetify/cli-proxy/`에 설치해야 합니다.
+> **주의:** 프록시 서버는 spicetify 설정 폴더 아래 `cli-proxy/`에 설치해야 합니다.
+> - macOS/Linux: `~/.config/spicetify/cli-proxy/`
+> - Windows: `%APPDATA%\spicetify\cli-proxy\`
+>
 > ivLyrics 폴더(`CustomApps/ivLyrics/`) 안에 넣으면 로딩 오류가 발생합니다.
 
-### Step 1: 파일 복사
+### macOS / Linux
+
+#### Step 1: 파일 복사
 
 리포지토리를 클론했다면:
 
@@ -130,19 +158,55 @@ curl -fsSLO "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provi
 chmod +x spotify-with-proxy.sh
 ```
 
-### Step 2: 의존성 설치
+#### Step 2: 의존성 설치
 
 ```bash
 cd ~/.config/spicetify/cli-proxy
 npm install
 ```
 
-> Node.js가 설치되어 있지 않다면 먼저 [nodejs.org](https://nodejs.org/)에서 설치하세요.
-
-### Step 3: 서버 실행
+#### Step 3: 서버 실행
 
 ```bash
 cd ~/.config/spicetify/cli-proxy
+npm start
+```
+
+### Windows (PowerShell)
+
+#### Step 1: 파일 복사
+
+리포지토리를 클론했다면:
+
+```powershell
+Copy-Item -Recurse cli-proxy "$env:APPDATA\spicetify\cli-proxy"
+```
+
+클론 없이 직접 다운로드:
+
+```powershell
+$dir = "$env:APPDATA\spicetify\cli-proxy"
+New-Item -ItemType Directory -Path $dir -Force | Out-Null
+cd $dir
+$base = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/cli-proxy"
+foreach ($f in @('server.js','package.json','spotify-with-proxy.ps1','.env.example')) {
+    Invoke-WebRequest -Uri "$base/$f" -OutFile $f -UseBasicParsing
+}
+```
+
+#### Step 2: 의존성 설치
+
+```powershell
+cd "$env:APPDATA\spicetify\cli-proxy"
+npm install
+```
+
+> Node.js가 설치되어 있지 않다면 먼저 [nodejs.org](https://nodejs.org/)에서 설치하세요.
+
+#### Step 3: 서버 실행
+
+```powershell
+cd "$env:APPDATA\spicetify\cli-proxy"
 npm start
 ```
 
@@ -193,13 +257,19 @@ Gemini CLI를 사용하려면 OAuth 클라이언트 정보가 필요합니다.
 1. 위 설치 명령어로 애드온과 프록시 서버를 설치합니다.
 2. 프록시 서버를 실행합니다:
    ```bash
+   # macOS / Linux
    cd ~/.config/spicetify/cli-proxy && npm start
+
+   # Windows (PowerShell)
+   cd "$env:APPDATA\spicetify\cli-proxy"; npm start
    ```
 3. Spotify를 실행하고 ivLyrics 설정에서 원하는 CLI Provider를 활성화합니다.
 
-### Spotify와 함께 자동 시작/종료 (macOS)
+### Spotify와 함께 자동 시작/종료
 
-매번 수동으로 서버를 실행하기 번거롭다면 `spotify-with-proxy.sh`를 사용할 수 있습니다. Spotify를 시작할 때 프록시 서버를 자동으로 실행하고, Spotify를 종료하면 함께 종료됩니다.
+매번 수동으로 서버를 실행하기 번거롭다면 래퍼 스크립트를 사용할 수 있습니다. Spotify를 시작할 때 프록시 서버를 자동으로 실행하고, Spotify를 종료하면 함께 종료됩니다.
+
+**macOS / Linux:**
 
 ```bash
 # 직접 실행
@@ -208,6 +278,18 @@ Gemini CLI를 사용하려면 OAuth 클라이언트 정보가 필요합니다.
 # 또는 alias 등록 (zshrc/bashrc)
 echo 'alias spotify="~/.config/spicetify/cli-proxy/spotify-with-proxy.sh"' >> ~/.zshrc
 source ~/.zshrc
+spotify
+```
+
+**Windows (PowerShell):**
+
+```powershell
+# 직접 실행
+& "$env:APPDATA\spicetify\cli-proxy\spotify-with-proxy.ps1"
+
+# 또는 PowerShell profile에 function 등록
+Add-Content $PROFILE 'function spotify { & "$env:APPDATA\spicetify\cli-proxy\spotify-with-proxy.ps1" }'
+# 새 PowerShell 창에서:
 spotify
 ```
 
