@@ -293,61 +293,72 @@ Add-Content $PROFILE 'function spotify { & "$env:APPDATA\spicetify\cli-proxy\spo
 spotify
 ```
 
+<details>
+<summary>API Endpoints (개발자용 / For Developers)</summary>
+
 ## API Endpoints
 
-프록시 서버는 다음 엔드포인트를 제공합니다:
+프록시 서버는 다음 엔드포인트를 제공합니다. 일반 사용자는 이 섹션을 참고할 필요 없습니다 — 애드온이 자동으로 처리합니다.
 
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/health` | 서버 상태 및 사용 가능한 도구 목록 확인 |
-| GET | `/tools` | 사용 가능한 CLI 도구 목록 |
-| GET | `/models` | 도구별 사용 가능한 모델 목록 |
-| POST | `/generate` | AI 텍스트 생성 (SSE 스트리밍 지원) |
-| GET | `/updates` | 업데이트 확인 |
-| POST | `/update` | 파일 업데이트 다운로드 및 적용 |
-| POST | `/v1/chat/completions` | OpenAI API 호환 엔드포인트 |
+The proxy server provides the following endpoints. Regular users don't need this section — the addons handle everything automatically.
 
-### SSE 스트리밍
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Server status & available tools / 서버 상태 및 도구 목록 |
+| GET | `/tools` | List available CLI tools / CLI 도구 목록 |
+| GET | `/models` | List available models per tool / 도구별 모델 목록 |
+| POST | `/generate` | Generate text with SSE streaming support / AI 텍스트 생성 (SSE 스트리밍 지원) |
+| GET | `/updates` | Check for updates / 업데이트 확인 |
+| POST | `/update` | Download and apply updates / 업데이트 다운로드 및 적용 |
+| POST | `/v1/chat/completions` | OpenAI-compatible endpoint / OpenAI API 호환 |
 
-`/generate` 엔드포인트는 SSE(Server-Sent Events) 스트리밍을 지원합니다. `stream: true`를 요청 body에 추가하면 점진적 응답을 받을 수 있습니다:
+### SSE Streaming / SSE 스트리밍
+
+The `/generate` endpoint supports SSE (Server-Sent Events) streaming. Add `stream: true` to the request body for progressive responses.
+
+`/generate` 엔드포인트는 SSE 스트리밍을 지원합니다. `stream: true`를 요청 body에 추가하면 점진적 응답을 받을 수 있습니다.
 
 ```bash
-# 스트리밍 요청
+# Streaming request / 스트리밍 요청
 curl -N -X POST http://localhost:19284/generate \
   -H 'Content-Type: application/json' \
   -d '{"tool":"claude","prompt":"Say hello","stream":true}'
 
-# 일반 요청 (역호환)
+# Non-streaming request (backward compatible) / 일반 요청 (역호환)
 curl -X POST http://localhost:19284/generate \
   -H 'Content-Type: application/json' \
   -d '{"tool":"claude","prompt":"Say hello"}'
 ```
 
-SSE 프로토콜:
+SSE protocol / SSE 프로토콜:
 ```
-data: {"chunk":"partial text"}\n\n     # 텍스트 청크
-data: {"error":"message"}\n\n          # 에러 (발생 시)
-data: [DONE]\n\n                       # 종료 신호
+data: {"chunk":"partial text"}\n\n     # Text chunk / 텍스트 청크
+data: {"error":"message"}\n\n          # Error (if any) / 에러
+data: [DONE]\n\n                       # End signal / 종료 신호
 ```
 
-### 자동 업데이트
+### Auto-Update / 자동 업데이트
 
-서버 시작 시 GitHub에서 최신 버전을 자동으로 확인합니다. 수동으로도 확인할 수 있습니다:
+The server automatically checks for updates on startup. You can also check manually.
+
+서버 시작 시 GitHub에서 최신 버전을 자동으로 확인합니다. 수동으로도 확인할 수 있습니다.
 
 ```bash
-# 업데이트 확인
+# Check for updates / 업데이트 확인
 curl http://localhost:19284/updates
 
-# 강제 재확인 (캐시 무시)
+# Force re-check (ignore cache) / 강제 재확인 (캐시 무시)
 curl http://localhost:19284/updates?force=1
 
-# 애드온 업데이트 적용
+# Apply addon updates / 애드온 업데이트 적용
 curl -X POST http://localhost:19284/update \
   -H 'Content-Type: application/json' \
   -d '{"target":"addons"}'
 ```
 
-`target` 옵션: `addons`, `proxy`, `all`, 또는 개별 파일명 (예: `Addon_AI_CLI_ClaudeCode.js`)
+`target` options / 옵션: `addons`, `proxy`, `all`, or a specific filename / 또는 개별 파일명 (e.g., `Addon_AI_CLI_ClaudeCode.js`)
+
+</details>
 
 ## License
 
