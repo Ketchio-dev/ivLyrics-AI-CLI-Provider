@@ -58,17 +58,8 @@ loadEnv();
 const app = express();
 const PORT = process.env.PORT || 19284;
 
-app.use(cors({
-    origin: (origin, callback) => {
-        // Allow requests with no origin (curl, server-to-server, etc.)
-        if (!origin) return callback(null, true);
-        // Allow only localhost/127.0.0.1 origins (any port)
-        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-            return callback(null, true);
-        }
-        callback(new Error('CORS not allowed from this origin'));
-    }
-}));
+// CORS 전면 허용 (서버는 127.0.0.1에만 바인딩하여 외부 접근 차단)
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 // ============================================
@@ -878,9 +869,9 @@ app.post('/v1/chat/completions', async (req, res) => {
 // Start Server
 // ============================================
 
-app.listen(PORT, () => {
+app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n🚀 ivLyrics CLI Proxy Server v2.0.0`);
-    console.log(`   Running on http://localhost:${PORT}`);
+    console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
     console.log(`\n📋 Available endpoints:`);
     console.log(`   GET  /health   - Check server status and available tools`);
     console.log(`   GET  /tools    - List available CLI tools`);
