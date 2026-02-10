@@ -543,6 +543,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 }, []);
 
                 const [updateStatus, setUpdateStatus] = useState('');
+                const [hasUpdates, setHasUpdates] = useState(false);
 
                 const handleTest = useCallback(async () => {
                     setTestStatus('Testing...');
@@ -556,6 +557,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                 const handleCheckUpdate = useCallback(async () => {
                     setUpdateStatus('Checking...');
+                    setHasUpdates(false);
                     try {
                         const result = await checkAddonUpdate(true);
                         if (!result) {
@@ -566,11 +568,35 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             const addonInfo = result.addons?.['Addon_AI_CLI_GeminiCLI.js'];
                             if (addonInfo) parts.push(`Addon: ${addonInfo.current} → ${addonInfo.latest}`);
                             setUpdateStatus(`Updates available: ${parts.join(', ') || 'See /updates'}`);
+                            setHasUpdates(true);
                         } else {
                             setUpdateStatus('✓ Everything is up to date');
                         }
                     } catch (e) {
                         setUpdateStatus(`✗ ${e.message}`);
+                    }
+                }, []);
+
+                const handleApplyUpdate = useCallback(async () => {
+                    setUpdateStatus('Updating...');
+                    try {
+                        const proxyUrl = getProxyUrl();
+                        const response = await fetch(`${proxyUrl}/update`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ target: 'all' })
+                        });
+                        if (!response.ok) {
+                            const err = await response.json().catch(() => ({}));
+                            throw new Error(err.error || `HTTP ${response.status}`);
+                        }
+                        const data = await response.json();
+                        const updated = (data.results || []).map(r => r.file).join(', ');
+                        setUpdateStatus(`✓ Updated: ${updated}. Refresh Spotify to apply.`);
+                        setHasUpdates(false);
+                        Spicetify.showNotification?.('Update complete! Refresh Spotify to apply addon changes.');
+                    } catch (e) {
+                        setUpdateStatus(`✗ Update failed: ${e.message}`);
                     }
                 }, []);
 
@@ -713,10 +739,18 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     ),
 
                     React.createElement('div', { className: 'ai-addon-setting' },
-                        React.createElement('button', {
-                            onClick: handleCheckUpdate,
-                            className: 'ai-addon-btn-secondary'
-                        }, 'Check for Updates'),
+                        React.createElement('div', {
+                            style: { display: 'flex', gap: '8px', alignItems: 'center' }
+                        },
+                            React.createElement('button', {
+                                onClick: handleCheckUpdate,
+                                className: 'ai-addon-btn-secondary'
+                            }, 'Check for Updates'),
+                            hasUpdates && React.createElement('button', {
+                                onClick: handleApplyUpdate,
+                                className: 'ai-addon-btn-primary'
+                            }, 'Update Now')
+                        ),
                         updateStatus && React.createElement('span', {
                             className: `ai-addon-test-status ${updateStatus.startsWith('✓') ? 'success' : updateStatus.startsWith('✗') ? 'error' : ''}`
                         }, updateStatus)
