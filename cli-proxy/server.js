@@ -41,7 +41,17 @@ loadEnv();
 const app = express();
 const PORT = process.env.PORT || 19284;
 
-app.use(cors());
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (curl, server-to-server, etc.)
+        if (!origin) return callback(null, true);
+        // Allow only localhost/127.0.0.1 origins (any port)
+        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+            return callback(null, true);
+        }
+        callback(new Error('CORS not allowed from this origin'));
+    }
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // ============================================
@@ -509,7 +519,6 @@ function discoverGeminiModels() {
     const map = new Map();
     const geminiTmpDir = path.join(os.homedir(), '.gemini', 'tmp');
     const jsonFiles = walkDirSafe(geminiTmpDir, [], 600);
-    const modelRegex = /"model"\s*:\s*"([^"]+)"/g;
 
     for (const filePath of jsonFiles) {
         let text = '';
@@ -519,6 +528,7 @@ function discoverGeminiModels() {
             continue;
         }
 
+        const modelRegex = /"model"\s*:\s*"([^"]+)"/g;
         let match;
         while ((match = modelRegex.exec(text)) !== null) {
             const modelId = normalizeModelId(match[1]);
@@ -600,6 +610,15 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
 
         let stdout = '';
         let stderr = '';
+        let settled = false;
+
+        const timer = setTimeout(() => {
+            if (!settled) {
+                settled = true;
+                proc.kill('SIGKILL');
+                reject(new Error(`Timeout after ${timeout}ms`));
+            }
+        }, timeout);
 
         proc.stdout.on('data', (data) => {
             stdout += data.toString();
@@ -610,6 +629,9 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
         });
 
         proc.on('close', (code) => {
+            clearTimeout(timer);
+            if (settled) return;
+            settled = true;
             if (code === 0) {
                 const result = tool.parseOutput(stdout);
                 console.log(`[${toolId}] SUCCESS - Response length: ${result.length} chars`);
@@ -621,13 +643,11 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
         });
 
         proc.on('error', (err) => {
+            clearTimeout(timer);
+            if (settled) return;
+            settled = true;
             reject(new Error(`Failed to start ${tool.command}: ${err.message}`));
         });
-
-        setTimeout(() => {
-            proc.kill();
-            reject(new Error(`Timeout after ${timeout}ms`));
-        }, timeout);
     });
 }
 
@@ -685,11 +705,18 @@ async function runTool(toolId, prompt, model = '', timeout = 120000) {
  * 헬스 체크 & 사용 가능한 도구 목록
  */
 app.get('/health', async (req, res) => {
+    const toolIds = Object.keys(CLI_TOOLS);
+    const results = await Promise.allSettled(
+        toolIds.map(toolId => checkToolAvailable(toolId))
+    );
+
     const tools = {};
-    for (const toolId of Object.keys(CLI_TOOLS)) {
-        const status = await checkToolAvailable(toolId);
+    toolIds.forEach((toolId, i) => {
+        const status = results[i].status === 'fulfilled'
+            ? results[i].value
+            : { available: false, error: results[i].reason?.message || 'Check failed' };
         tools[toolId] = { ...status, mode: CLI_TOOLS[toolId].mode };
-    }
+    });
 
     res.json({
         status: 'ok',
@@ -831,7 +858,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 // Start Server
 // ============================================
 
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
     console.log(`\n🚀 ivLyrics CLI Proxy Server v2.0.0`);
     console.log(`   Running on http://localhost:${PORT}`);
     console.log(`\n📋 Available endpoints:`);
@@ -842,13 +869,15 @@ app.listen(PORT, async () => {
     console.log(`   POST /v1/chat/completions - OpenAI-compatible endpoint`);
     console.log(`\n🔧 Checking available tools...`);
 
-    for (const toolId of Object.keys(CLI_TOOLS)) {
-        const tool = CLI_TOOLS[toolId];
-        const status = await checkToolAvailable(toolId);
-        const icon = status.available ? '✓' : '✗';
-        const modeTag = tool.mode === 'sdk' ? '[SDK]' : '[CLI]';
-        console.log(`   ${icon} ${toolId} ${modeTag}: ${status.available ? 'available' : status.error} (default: ${tool.defaultModel || 'auto'})`);
-    }
-
-    console.log(`\n`);
+    Promise.allSettled(
+        Object.keys(CLI_TOOLS).map(async (toolId) => {
+            const tool = CLI_TOOLS[toolId];
+            const status = await checkToolAvailable(toolId);
+            const icon = status.available ? '✓' : '✗';
+            const modeTag = tool.mode === 'sdk' ? '[SDK]' : '[CLI]';
+            console.log(`   ${icon} ${toolId} ${modeTag}: ${status.available ? 'available' : status.error} (default: ${tool.defaultModel || 'auto'})`);
+        })
+    ).then(() => {
+        console.log(`\n`);
+    });
 });

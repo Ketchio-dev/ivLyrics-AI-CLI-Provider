@@ -1,7 +1,7 @@
 {
   "name": "ivlyrics-cli-proxy",
   "version": "1.0.0",
-  "description": "Local proxy server for CLI AI tools (Antigravity, Claude Code, Codex CLI)",
+  "description": "Local proxy server for CLI AI tools (Claude Code, Codex CLI, Gemini CLI)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,6 +10,6 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "google-auth-library": "latest"
+    "google-auth-library": "^9.0.0"
   }
 }
