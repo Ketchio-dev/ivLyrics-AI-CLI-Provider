@@ -760,6 +760,12 @@ async function getModelsForTool(toolId, forceRefresh = false) {
 }
 
 /**
+ * 동시 CLI 프로세스 수 제한
+ */
+const MAX_CONCURRENT_CLI = 5;
+let activeCLIProcesses = 0;
+
+/**
  * CLI 도구 실행 (spawn 방식)
  */
 function runCLI(toolId, prompt, model = '', timeout = 120000) {
@@ -768,6 +774,11 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
         if (!tool) {
             return reject(new Error(`Unknown tool: ${toolId}`));
         }
+
+        if (activeCLIProcesses >= MAX_CONCURRENT_CLI) {
+            return reject(new Error(`Too many concurrent requests (max ${MAX_CONCURRENT_CLI}). Please try again later.`));
+        }
+        activeCLIProcesses++;
 
         const args = tool.buildArgs(prompt, model, tool.defaultModel);
         const actualModel = model || tool.defaultModel || 'default';
@@ -808,6 +819,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
 
         proc.on('close', (code) => {
             clearTimeout(timer);
+            activeCLIProcesses--;
             if (settled) return;
             settled = true;
             if (code === 0) {
@@ -822,6 +834,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
 
         proc.on('error', (err) => {
             clearTimeout(timer);
+            activeCLIProcesses--;
             if (settled) return;
             settled = true;
             reject(new Error(`Failed to start ${tool.command}: ${err.message}`));
@@ -896,22 +909,28 @@ function setupSSE(res) {
  * SSE 청크 전송
  */
 function sendSSEChunk(res, chunk) {
-    res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+    if (!res.writableEnded && res.writable) {
+        res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+    }
 }
 
 /**
  * SSE 에러 전송
  */
 function sendSSEError(res, message) {
-    res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+    if (!res.writableEnded && res.writable) {
+        res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+    }
 }
 
 /**
  * SSE 종료 신호 전송
  */
 function sendSSEDone(res) {
-    res.write('data: [DONE]\n\n');
-    res.end();
+    if (!res.writableEnded) {
+        res.write('data: [DONE]\n\n');
+        res.end();
+    }
 }
 
 /**
@@ -924,6 +943,13 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         sendSSEDone(res);
         return;
     }
+
+    if (activeCLIProcesses >= MAX_CONCURRENT_CLI) {
+        sendSSEError(res, `Too many concurrent requests (max ${MAX_CONCURRENT_CLI}). Please try again later.`);
+        sendSSEDone(res);
+        return;
+    }
+    activeCLIProcesses++;
 
     const args = tool.buildArgs(prompt, model, tool.defaultModel);
     const actualModel = model || tool.defaultModel || 'default';
@@ -961,6 +987,7 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
             settled = true;
             clearTimeout(timer);
             proc.kill('SIGKILL');
+            // activeCLIProcesses는 proc.on('close')에서 감소됨
         }
     });
 
@@ -977,6 +1004,7 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
 
     proc.on('close', (code) => {
         clearTimeout(timer);
+        activeCLIProcesses--;
         if (settled) return;
         settled = true;
         if (code !== 0) {
@@ -990,6 +1018,7 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
 
     proc.on('error', (err) => {
         clearTimeout(timer);
+        activeCLIProcesses--;
         if (settled) return;
         settled = true;
         sendSSEError(res, `Failed to start ${tool.command}: ${err.message}`);
@@ -1116,12 +1145,18 @@ app.get('/models', async (req, res) => {
 /**
  * 특정 도구로 프롬프트 실행
  */
+const MAX_PROMPT_LENGTH = 50000; // 50KB
+
 app.post('/generate', async (req, res) => {
     const { tool, model, prompt, timeout, stream } = req.body;
     const streamEnabled = stream === true || stream === 'true' || req.query.stream === 'true';
 
     if (!tool || !prompt) {
         return res.status(400).json({ error: 'Missing tool or prompt' });
+    }
+
+    if (typeof prompt !== 'string' || prompt.length > MAX_PROMPT_LENGTH) {
+        return res.status(400).json({ error: `Prompt too large (max ${MAX_PROMPT_LENGTH} chars)` });
     }
 
     const toolStatus = await checkToolAvailable(tool);
@@ -1180,11 +1215,30 @@ app.post('/update', async (req, res) => {
         return res.status(400).json({ error: 'Missing target (addons, proxy, all, or filename)' });
     }
 
+    // 허용된 target만 수락 (path traversal 방지)
+    const ALLOWED_TARGETS = new Set([
+        'addons', 'proxy', 'all',
+        'Addon_AI_CLI_ClaudeCode.js',
+        'Addon_AI_CLI_CodexCLI.js',
+        'Addon_AI_CLI_GeminiCLI.js'
+    ]);
+    if (!ALLOWED_TARGETS.has(target)) {
+        return res.status(400).json({ error: `Invalid target: ${target}` });
+    }
+
     try {
         const results = [];
 
         const downloadFile = async (remotePath, localPath, label) => {
-            const url = `${GITHUB_RAW_BASE}/${remotePath}`;
+            // Path traversal 방지: 파일명에 경로 구분자나 .. 포함 시 차단
+            const basename = path.basename(localPath);
+            const resolvedDir = path.resolve(path.dirname(localPath));
+            const resolvedFull = path.resolve(localPath);
+            if (resolvedFull !== path.join(resolvedDir, basename)) {
+                throw new Error(`Invalid path detected: ${label}`);
+            }
+
+            const url = `${GITHUB_RAW_BASE}/${encodeURI(remotePath)}`;
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 30000);
             const response = await fetch(url, { signal: controller.signal });
@@ -1283,6 +1337,10 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     if (!prompt) {
         return res.status(400).json({ error: 'No prompt provided' });
+    }
+
+    if (typeof prompt !== 'string' || prompt.length > MAX_PROMPT_LENGTH) {
+        return res.status(400).json({ error: `Prompt too large (max ${MAX_PROMPT_LENGTH} chars)` });
     }
 
     try {
