@@ -290,9 +290,43 @@ async function getGeminiProjectId(token) {
 }
 
 /**
- * Gemini Code Assist API로 직접 호출
+ * Gemini 요청 직렬화 큐 (동시 요청 → rate limit 방지)
+ */
+const geminiQueue = [];
+let geminiQueueRunning = false;
+
+function enqueueGeminiRequest(fn) {
+    return new Promise((resolve, reject) => {
+        geminiQueue.push({ fn, resolve, reject });
+        processGeminiQueue();
+    });
+}
+
+async function processGeminiQueue() {
+    if (geminiQueueRunning || geminiQueue.length === 0) return;
+    geminiQueueRunning = true;
+
+    while (geminiQueue.length > 0) {
+        const { fn, resolve, reject } = geminiQueue.shift();
+        try {
+            const result = await fn();
+            resolve(result);
+        } catch (e) {
+            reject(e);
+        }
+    }
+
+    geminiQueueRunning = false;
+}
+
+/**
+ * Gemini Code Assist API로 직접 호출 (rate limit 재시도 포함)
  */
 async function geminiGenerateContent(prompt, model) {
+    return enqueueGeminiRequest(() => geminiGenerateContentInner(prompt, model));
+}
+
+async function geminiGenerateContentInner(prompt, model) {
     if (!geminiAuth) {
         geminiAuth = initGeminiAuth();
     }
@@ -300,50 +334,77 @@ async function geminiGenerateContent(prompt, model) {
     const { token } = await geminiAuth.getAccessToken();
     const projectId = await getGeminiProjectId(token);
     const endpoint = `${CODE_ASSIST_ENDPOINT}:generateContent`;
-    let response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            model,
-            project: projectId,
-            request: buildGeminiGenerateRequest(prompt, true),
-        }),
-    });
 
-    if (!response.ok) {
-        const errorBody = await response.text();
-        if (isGeminiThinkingConfigError(response.status, errorBody)) {
-            console.warn('[gemini] thinking disable config not supported for this request, retrying without it');
-            response = await fetch(endpoint, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model,
-                    project: projectId,
-                    request: buildGeminiGenerateRequest(prompt, false),
-                }),
-            });
-            if (!response.ok) {
-                const retryErrorBody = await response.text();
-                throw new Error(`Gemini API error ${response.status}: ${retryErrorBody}`);
-            }
-        } else {
-            throw new Error(`Gemini API error ${response.status}: ${errorBody}`);
+    const MAX_RETRIES = 3;
+    let lastError = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        let response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model,
+                project: projectId,
+                request: buildGeminiGenerateRequest(prompt, true),
+            }),
+        });
+
+        // Rate limit → wait and retry
+        if (response.status === 429) {
+            const retryAfter = parseInt(response.headers.get('retry-after') || '0', 10);
+            const waitMs = Math.max(retryAfter * 1000, 2000 * (attempt + 1));
+            console.warn(`[gemini] Rate limited (429), waiting ${waitMs}ms before retry ${attempt + 1}/${MAX_RETRIES}`);
+            await new Promise(r => setTimeout(r, waitMs));
+            continue;
         }
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            if (isGeminiThinkingConfigError(response.status, errorBody)) {
+                console.warn('[gemini] thinking disable config not supported for this request, retrying without it');
+                response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model,
+                        project: projectId,
+                        request: buildGeminiGenerateRequest(prompt, false),
+                    }),
+                });
+
+                if (response.status === 429) {
+                    const waitMs = 2000 * (attempt + 1);
+                    console.warn(`[gemini] Rate limited (429) on fallback, waiting ${waitMs}ms`);
+                    await new Promise(r => setTimeout(r, waitMs));
+                    continue;
+                }
+
+                if (!response.ok) {
+                    const retryErrorBody = await response.text();
+                    lastError = new Error(`Gemini API error ${response.status}: ${retryErrorBody}`);
+                    continue;
+                }
+            } else {
+                lastError = new Error(`Gemini API error ${response.status}: ${errorBody}`);
+                continue;
+            }
+        }
+
+        const data = await response.json();
+        const text = data.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) {
+            throw new Error('No text in Gemini response');
+        }
+        return text;
     }
 
-    const data = await response.json();
-    const text = data.response?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-        throw new Error('No text in Gemini response');
-    }
-    return text;
+    throw lastError || new Error('Gemini API: max retries exceeded');
 }
 
 // ============================================
