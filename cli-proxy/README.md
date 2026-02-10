@@ -1,20 +1,19 @@
 # ivLyrics CLI Proxy Server
 
-로컬 CLI AI 도구들 (Antigravity, Claude Code, Codex 등)을 ivLyrics에서 사용할 수 있게 해주는 프록시 서버입니다.
+로컬 CLI AI 도구들 (Claude Code, Codex, Gemini 등)을 ivLyrics에서 사용할 수 있게 해주는 프록시 서버입니다.
 
 ## 지원 CLI 도구
 
-| Tool | Command | Description |
-|------|---------|-------------|
-| **Antigravity** | `antigravity` | Google AI Pro/Ultra 구독자용 Gemini CLI |
-| **Claude Code** | `claude` | Anthropic Claude 구독자용 CLI |
-| **Codex** | `codex` | OpenAI Codex CLI |
-| **Gemini** | `gemini` | Google Gemini CLI |
+| Tool | Command | Mode | Description |
+|------|---------|------|-------------|
+| **Claude Code** | `claude` | CLI | Anthropic Claude 구독자용 CLI |
+| **Codex** | `codex` | CLI | OpenAI Codex CLI |
+| **Gemini** | `gemini` | SDK | Google Gemini CLI (Code Assist API 직접 호출) |
 
 ## 설치
 
 ```bash
-cd ~/.config/spicetify/CustomApps/ivLyrics/cli-proxy
+cd ~/.config/spicetify/cli-proxy
 npm install
 ```
 
@@ -30,8 +29,7 @@ npm start
 
 1. 프록시 서버를 실행합니다
 2. Spotify에서 ivLyrics 설정으로 이동
-3. AI Providers에서 "CLI Proxy (Local)"를 활성화
-4. 사용할 CLI 도구를 선택
+3. AI Providers에서 사용할 CLI 도구 애드온을 활성화
 
 ## API Endpoints
 
@@ -47,6 +45,13 @@ curl http://localhost:19284/health
 
 ```bash
 curl http://localhost:19284/tools
+```
+
+### GET /models
+도구별 사용 가능한 모델 목록
+
+```bash
+curl http://localhost:19284/models?tool=claude
 ```
 
 ### POST /generate
@@ -85,8 +90,11 @@ curl -X POST http://localhost:19284/v1/chat/completions \
 # 예: Claude Code 설치 확인
 claude --version
 
-# 예: Antigravity 설치 확인
-antigravity --version
+# 예: Codex 설치 확인
+codex --version
+
+# 예: Gemini - OAuth 자격증명 확인
+ls ~/.gemini/oauth_creds.json
 ```
 
 ### 서버 연결 실패
@@ -102,8 +110,10 @@ curl http://localhost:19284/health
 
 ```javascript
 CLI_TOOLS.myTool = {
+    mode: 'cli',
     command: 'mytool',
     checkCommand: 'mytool --version',
+    defaultModel: '',
     buildArgs: (prompt) => ['--prompt', prompt],
     parseOutput: (stdout) => stdout.trim()
 };

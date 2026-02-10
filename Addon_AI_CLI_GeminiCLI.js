@@ -201,7 +201,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
     async function checkProxyHealth() {
         const proxyUrl = getProxyUrl();
         try {
-            const response = await fetch(`${proxyUrl}/health`, { timeout: 5000 });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const response = await fetch(`${proxyUrl}/health`, { signal: controller.signal });
+            clearTimeout(timeoutId);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             return await response.json();
         } catch (e) {
@@ -433,12 +436,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 }, []);
 
                 const handleRunCommand = useCallback(() => {
-                    // Open terminal and run command (macOS)
-                    const terminalCommand = `osascript -e 'tell application "Terminal" to do script "${setupCommand}"' -e 'tell application "Terminal" to activate'`;
-                    // Alternative: use Spicetify's shell if available, or show notification
                     try {
-                        // Try to open terminal via URL scheme (won't work in browser context)
-                        // Fallback: copy command and notify user
                         navigator.clipboard.writeText(setupCommand);
                         Spicetify.showNotification?.('Command copied! Open Terminal and paste to run.');
                     } catch (e) {
@@ -619,11 +617,15 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         }
     };
 
+    const MAX_REGISTER_RETRIES = 100;
+    let registerAttempts = 0;
     const registerAddon = () => {
         if (window.AIAddonManager) {
             window.AIAddonManager.register(GeminiCLIAddon);
-        } else {
+        } else if (++registerAttempts < MAX_REGISTER_RETRIES) {
             setTimeout(registerAddon, 100);
+        } else {
+            console.error('[Gemini CLI] AIAddonManager not found after max retries');
         }
     };
 
