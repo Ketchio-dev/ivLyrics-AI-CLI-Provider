@@ -20,6 +20,23 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// 사용자 로그인 셸에서 전체 PATH 가져오기 (GUI/서비스 환경에서 PATH가 제한될 수 있음)
+function expandPath() {
+    const extraDirs = [
+        path.join(os.homedir(), '.local', 'bin'),
+        path.join(os.homedir(), '.cargo', 'bin'),
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+    ];
+    const currentPath = process.env.PATH || '';
+    const currentDirs = new Set(currentPath.split(':'));
+    const missing = extraDirs.filter(d => !currentDirs.has(d) && fs.existsSync(d));
+    if (missing.length > 0) {
+        process.env.PATH = missing.join(':') + ':' + currentPath;
+    }
+}
+expandPath();
+
 // .env 파일 로드 (dotenv 없이 직접 파싱)
 function loadEnv() {
     try {
@@ -607,6 +624,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
 
         const proc = spawn(tool.command, args, {
             stdio: ['ignore', 'pipe', 'pipe'],
+            cwd: os.tmpdir(),
             env: { ...process.env, NO_COLOR: '1' }
         });
 
