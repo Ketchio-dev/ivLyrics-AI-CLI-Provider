@@ -97,41 +97,119 @@ spicetify apply
 ## 사전 요구사항
 
 - [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics)가 설치되어 있어야 합니다.
-- 프록시 서버가 실행 중이어야 합니다 (기본: `http://localhost:19284`)
-- 사용하려는 CLI 도구가 설치되어 있어야 합니다:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-  - [Codex CLI](https://github.com/openai/codex)
-  - [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+- [Node.js](https://nodejs.org/) v18 이상이 설치되어 있어야 합니다 (프록시 서버 실행에 필요).
+- 사용하려는 CLI 도구가 최소 1개 이상 설치되어 있어야 합니다:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) - Anthropic 구독 필요
+  - [Codex CLI](https://github.com/openai/codex) - OpenAI 구독 필요
+  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) - Google 계정 필요
 
 ## 프록시 서버 설치
 
-애드온이 동작하려면 프록시 서버가 필요합니다.
+애드온은 직접 AI CLI를 실행할 수 없기 때문에 로컬 프록시 서버가 중간에서 요청을 전달합니다. **애드온 설치 후 반드시 프록시 서버를 설치해야 합니다.**
 
 > **주의:** 프록시 서버는 반드시 `~/.config/spicetify/cli-proxy/`에 설치해야 합니다.
 > ivLyrics 폴더(`CustomApps/ivLyrics/`) 안에 넣으면 로딩 오류가 발생합니다.
 
-```bash
-# 프록시 서버 파일 복사 (~/.config/spicetify/cli-proxy/ 에 설치)
-cp -r cli-proxy ~/.config/spicetify/cli-proxy
+### Step 1: 파일 복사
 
-# 의존성 설치
+리포지토리를 클론했다면:
+
+```bash
+cp -r cli-proxy ~/.config/spicetify/cli-proxy
+```
+
+클론 없이 직접 다운로드:
+
+```bash
+mkdir -p ~/.config/spicetify/cli-proxy
+cd ~/.config/spicetify/cli-proxy
+curl -fsSLO "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/cli-proxy/server.js"
+curl -fsSLO "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/cli-proxy/package.json"
+curl -fsSLO "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/cli-proxy/spotify-with-proxy.sh"
+curl -fsSLO "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/cli-proxy/.env.example"
+chmod +x spotify-with-proxy.sh
+```
+
+### Step 2: 의존성 설치
+
+```bash
 cd ~/.config/spicetify/cli-proxy
 npm install
 ```
 
+> Node.js가 설치되어 있지 않다면 먼저 [nodejs.org](https://nodejs.org/)에서 설치하세요.
+
+### Step 3: 서버 실행
+
+```bash
+cd ~/.config/spicetify/cli-proxy
+npm start
+```
+
+정상적으로 실행되면 아래와 같은 출력이 나타납니다:
+
+```
+🚀 ivLyrics CLI Proxy Server v2.0.0
+   Running on http://localhost:19284
+
+🔧 Checking available tools...
+   ✓ claude [CLI]: available
+   ✓ gemini [SDK]: available
+   ✓ codex [CLI]: available
+```
+
+### Step 4: 동작 확인
+
+새 터미널을 열어서 다음 명령어로 서버 상태를 확인할 수 있습니다:
+
+```bash
+curl http://localhost:19284/health
+```
+
+### Gemini CLI 사용 시 추가 설정
+
+Gemini CLI를 사용하려면 OAuth 클라이언트 정보가 필요합니다.
+
+1. 먼저 `gemini` CLI를 한 번 실행하여 로그인합니다 (OAuth 자격증명 자동 생성):
+   ```bash
+   gemini
+   ```
+
+2. `.env` 파일을 생성합니다:
+   ```bash
+   cd ~/.config/spicetify/cli-proxy
+   cp .env.example .env
+   ```
+
+3. `.env` 파일을 열어 Gemini CLI의 OAuth Client ID와 Secret을 입력합니다:
+   ```
+   GEMINI_OAUTH_CLIENT_ID=your_client_id_here
+   GEMINI_OAUTH_CLIENT_SECRET=your_client_secret_here
+   ```
+   > Client ID와 Secret은 [Gemini CLI 소스코드](https://github.com/google-gemini/gemini-cli)에서 확인할 수 있습니다.
+
 ## 사용법
 
-1. 위 설치 명령어로 애드온을 설치합니다.
+1. 위 설치 명령어로 애드온과 프록시 서버를 설치합니다.
 2. 프록시 서버를 실행합니다:
    ```bash
    cd ~/.config/spicetify/cli-proxy && npm start
    ```
-   또는 Spotify와 함께 자동 시작/종료:
-   ```bash
-   chmod +x ~/.config/spicetify/cli-proxy/spotify-with-proxy.sh
-   ~/.config/spicetify/cli-proxy/spotify-with-proxy.sh
-   ```
-3. ivLyrics 설정에서 원하는 CLI Provider를 활성화합니다.
+3. Spotify를 실행하고 ivLyrics 설정에서 원하는 CLI Provider를 활성화합니다.
+
+### Spotify와 함께 자동 시작/종료 (macOS)
+
+매번 수동으로 서버를 실행하기 번거롭다면 `spotify-with-proxy.sh`를 사용할 수 있습니다. Spotify를 시작할 때 프록시 서버를 자동으로 실행하고, Spotify를 종료하면 함께 종료됩니다.
+
+```bash
+# 직접 실행
+~/.config/spicetify/cli-proxy/spotify-with-proxy.sh
+
+# 또는 alias 등록 (zshrc/bashrc)
+echo 'alias spotify="~/.config/spicetify/cli-proxy/spotify-with-proxy.sh"' >> ~/.zshrc
+source ~/.zshrc
+spotify
+```
 
 ## License
 
