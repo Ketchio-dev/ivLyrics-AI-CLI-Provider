@@ -1145,18 +1145,12 @@ app.get('/models', async (req, res) => {
 /**
  * 특정 도구로 프롬프트 실행
  */
-const MAX_PROMPT_LENGTH = 50000; // 50KB
-
 app.post('/generate', async (req, res) => {
     const { tool, model, prompt, timeout, stream } = req.body;
     const streamEnabled = stream === true || stream === 'true' || req.query.stream === 'true';
 
     if (!tool || !prompt) {
         return res.status(400).json({ error: 'Missing tool or prompt' });
-    }
-
-    if (typeof prompt !== 'string' || prompt.length > MAX_PROMPT_LENGTH) {
-        return res.status(400).json({ error: `Prompt too large (max ${MAX_PROMPT_LENGTH} chars)` });
     }
 
     const toolStatus = await checkToolAvailable(tool);
@@ -1337,10 +1331,6 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     if (!prompt) {
         return res.status(400).json({ error: 'No prompt provided' });
-    }
-
-    if (typeof prompt !== 'string' || prompt.length > MAX_PROMPT_LENGTH) {
-        return res.status(400).json({ error: `Prompt too large (max ${MAX_PROMPT_LENGTH} chars)` });
     }
 
     try {
