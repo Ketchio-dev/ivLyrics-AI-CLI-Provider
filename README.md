@@ -1,3 +1,20 @@
+<img width="1210" height="798" alt="image" src="https://github.com/user-attachments/assets/6c2dbd9d-97e3-47a8-ba75-87da30c75357" />
+
+
+## People who are not familiar with this kind of projects. 
+
+I strongly recommend to download Antigarivty to smooth download
+
+If you finish to download the Antigravity you can just type 
+
+[ https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider    Download it for me. ]
+
+And everything done
+
+
+
+
+
 # ivLyrics AI CLI Provider Addons
 
 AI CLI Provider addons for [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics).
@@ -276,3 +293,4 @@ curl -X POST http://localhost:19284/update \
 ## License
 
 MIT
+
