@@ -601,7 +601,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     }
                 }, []);
 
-                const setupCommand = 'cd ~/.config/spicetify/cli-proxy && npm install && npm start';
+                const isWindows = /Windows/i.test(navigator.userAgent || '');
+                const setupCommand = isWindows
+                    ? 'cd "$env:APPDATA\\spicetify\\cli-proxy"; npm install; npm start'
+                    : 'cd ~/.config/spicetify/cli-proxy && npm install && npm start';
 
                 const handleCopyCommand = useCallback(async () => {
                     try {
@@ -610,16 +613,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     } catch (e) {
                         console.error('Failed to copy:', e);
                     }
-                }, []);
-
-                const handleRunCommand = useCallback(() => {
-                    try {
-                        navigator.clipboard.writeText(setupCommand);
-                        Spicetify.showNotification?.('Command copied! Open Terminal and paste to run.');
-                    } catch (e) {
-                        console.error('Failed to run command:', e);
-                    }
-                }, []);
+                }, [setupCommand]);
 
                 return React.createElement('div', { className: 'ai-addon-settings' },
                     React.createElement('div', {
@@ -665,19 +659,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     gap: '4px'
                                 },
                                 title: 'Copy command'
-                            }, '📋 Copy'),
-                            React.createElement('button', {
-                                onClick: handleRunCommand,
-                                className: 'ai-addon-btn-primary',
-                                style: {
-                                    padding: '4px 8px',
-                                    fontSize: '11px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '4px'
-                                },
-                                title: 'Copy and open Terminal'
-                            }, '▶️ Run')
+                            }, '📋 Copy')
                         )
                     ),
 
