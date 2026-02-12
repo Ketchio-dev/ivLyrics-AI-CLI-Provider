@@ -56,7 +56,7 @@ function loadEnv() {
             if (!trimmed || trimmed.startsWith('#')) continue;
             const eqIdx = trimmed.indexOf('=');
             if (eqIdx === -1) continue;
-            const key = trimmed.slice(0, eqIdx).trim();
+            const key = trimmed.slice(0, eqIdx).trim().replace(/^export\s+/, '');
             const val = trimmed.slice(eqIdx + 1).trim().replace(/^['"]|['"]$/g, '');
             if (!process.env[key]) process.env[key] = val;
         }
@@ -172,9 +172,13 @@ app.use(express.json({ limit: '10mb' }));
 // Gemini SDK (Code Assist API)
 // ============================================
 
-// Gemini CLI OAuth 클라이언트 정보 (.env 또는 환경변수에서 읽음)
-const GEMINI_OAUTH_CLIENT_ID = process.env.GEMINI_OAUTH_CLIENT_ID;
-const GEMINI_OAUTH_CLIENT_SECRET = process.env.GEMINI_OAUTH_CLIENT_SECRET;
+// Gemini OAuth client
+// - If env vars are set as a pair, use them.
+// - Otherwise read client_id/client_secret from ~/.gemini/oauth_creds.json.
+const GEMINI_OAUTH_CLIENT_ID_ENV = (process.env.GEMINI_OAUTH_CLIENT_ID || '').trim();
+const GEMINI_OAUTH_CLIENT_SECRET_ENV = (process.env.GEMINI_OAUTH_CLIENT_SECRET || '').trim();
+const GEMINI_HAS_CUSTOM_OAUTH_ENV = Boolean(GEMINI_OAUTH_CLIENT_ID_ENV && GEMINI_OAUTH_CLIENT_SECRET_ENV);
+const GEMINI_HAS_PARTIAL_OAUTH_ENV = Boolean(GEMINI_OAUTH_CLIENT_ID_ENV || GEMINI_OAUTH_CLIENT_SECRET_ENV) && !GEMINI_HAS_CUSTOM_OAUTH_ENV;
 const CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com/v1internal';
 const GEMINI_REASONING_OFF_CONFIG = Object.freeze({ thinkingConfig: { thinkingBudget: 0 } });
 const CLAUDE_REASONING_OFF_SYSTEM_PROMPT =
@@ -184,6 +188,90 @@ const CLAUDE_SAFE_DEFAULT_MODEL = 'claude-sonnet-4-5';
 
 let geminiAuth = null;       // OAuth2Client 캐시
 let geminiProjectId = null;  // Code Assist 프로젝트 ID 캐시
+let geminiOAuthSource = 'unset';
+
+function hasGeminiOAuthClientConfig(clientId, clientSecret) {
+    return Boolean(
+        normalizeModelId(clientId) &&
+        normalizeModelId(clientSecret)
+    );
+}
+
+function geminiOAuthConfigSource() {
+    return geminiOAuthSource;
+}
+
+function resolveGeminiOAuthClient(creds) {
+    if (GEMINI_HAS_CUSTOM_OAUTH_ENV) {
+        geminiOAuthSource = 'env';
+        return {
+            clientId: GEMINI_OAUTH_CLIENT_ID_ENV,
+            clientSecret: GEMINI_OAUTH_CLIENT_SECRET_ENV
+        };
+    }
+
+    if (GEMINI_HAS_PARTIAL_OAUTH_ENV) {
+        console.warn(
+            '[gemini] Incomplete GEMINI_OAUTH_* env vars detected; ' +
+            'ignoring env override and using oauth_creds.json values.'
+        );
+    }
+
+    const credsClientId = normalizeModelId(creds?.client_id || creds?.clientId || '');
+    const credsClientSecret = normalizeModelId(creds?.client_secret || creds?.clientSecret || '');
+    if (hasGeminiOAuthClientConfig(credsClientId, credsClientSecret)) {
+        geminiOAuthSource = 'oauth_creds';
+        return {
+            clientId: credsClientId,
+            clientSecret: credsClientSecret
+        };
+    }
+
+    geminiOAuthSource = 'missing';
+    return {
+        clientId: '',
+        clientSecret: ''
+    };
+}
+
+function formatGeminiAuthError(error) {
+    const message = String(error?.message || '').trim();
+    const oauthData = error?.response?.data;
+    const oauthCode = normalizeModelId(
+        typeof oauthData?.error === 'string' ? oauthData.error : message
+    );
+    const oauthDescription = normalizeModelId(
+        typeof oauthData?.error_description === 'string' ? oauthData.error_description : ''
+    );
+
+    if (oauthCode === 'invalid_request') {
+        if (geminiOAuthConfigSource() === 'env') {
+            return (
+                'Gemini OAuth token refresh failed (invalid_request). ' +
+                'Check GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET in cli-proxy/.env, ' +
+                'or remove both keys to use oauth_creds.json client values.'
+            );
+        }
+        return (
+            'Gemini OAuth token refresh failed (invalid_request). ' +
+            'Run `gemini` CLI again to re-authenticate.'
+        );
+    }
+    if (oauthCode === 'invalid_grant') {
+        return (
+            'Gemini OAuth token refresh failed (invalid_grant). ' +
+            'Run `gemini` CLI again to re-authenticate.'
+        );
+    }
+    if (message.includes('No refresh token')) {
+        return 'Gemini OAuth refresh token is missing. Run `gemini` CLI again to re-authenticate.';
+    }
+
+    if (oauthCode && oauthDescription) {
+        return `Gemini OAuth error (${oauthCode}): ${oauthDescription}`;
+    }
+    return message || 'Unknown Gemini OAuth error';
+}
 
 function buildGeminiGenerateRequest(prompt, disableReasoning) {
     const request = {
@@ -229,11 +317,19 @@ function initGeminiAuth() {
     }
 
     const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+    const { clientId, clientSecret } = resolveGeminiOAuthClient(creds);
+    if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) {
+        throw new Error(
+            'Gemini OAuth client config is empty. Set GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET ' +
+            'or run `gemini` CLI again to refresh oauth_creds.json.'
+        );
+    }
+
     const { OAuth2Client } = require('google-auth-library');
 
     const oauth2Client = new OAuth2Client(
-        GEMINI_OAUTH_CLIENT_ID,
-        GEMINI_OAUTH_CLIENT_SECRET,
+        clientId,
+        clientSecret,
     );
     oauth2Client.setCredentials({
         access_token: creds.access_token,
@@ -331,7 +427,17 @@ async function geminiGenerateContentInner(prompt, model) {
         geminiAuth = initGeminiAuth();
     }
 
-    const { token } = await geminiAuth.getAccessToken();
+    let token = '';
+    try {
+        const accessToken = await geminiAuth.getAccessToken();
+        token = normalizeModelId(accessToken?.token || '');
+    } catch (e) {
+        throw new Error(formatGeminiAuthError(e));
+    }
+    if (!token) {
+        throw new Error('Gemini OAuth access token is empty. Run `gemini` CLI again to re-authenticate.');
+    }
+
     const projectId = await getGeminiProjectId(token);
     const endpoint = `${CODE_ASSIST_ENDPOINT}:generateContent`;
 
