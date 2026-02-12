@@ -15,7 +15,7 @@
 
 const express = require('express');
 const cors = require('cors');
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -175,7 +175,7 @@ function hasGeminiOAuthClientConfig(clientId, clientSecret) {
 let geminiCliOAuthDefaultsCache = null;
 
 function trimShellLine(value) {
-    return normalizeModelId(String(value || '').replace(/^"(.*)"$/, '$1'));
+    return normalizeModelId(String(value || '').replace(/^['"](.*)['"]$/, '$1'));
 }
 
 function readCommandLines(command) {
@@ -190,6 +190,153 @@ function readCommandLines(command) {
     } catch {
         return [];
     }
+}
+
+let npmGlobalBinDirsCache = null;
+
+function splitCommandTokens(commandLine) {
+    const line = normalizeModelId(commandLine);
+    if (!line) return [];
+    const matches = line.match(/"[^"]*"|'[^']*'|[^\s]+/g) || [];
+    return matches.map(trimShellLine).filter(Boolean);
+}
+
+function isRunnableFile(filePath) {
+    if (!filePath) return false;
+    try {
+        if (!fs.existsSync(filePath)) return false;
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile() && !stat.isSymbolicLink()) return false;
+        if (process.platform !== 'win32') {
+            fs.accessSync(filePath, fs.constants.X_OK);
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function getNpmGlobalBinDirs() {
+    if (npmGlobalBinDirsCache) {
+        return npmGlobalBinDirsCache;
+    }
+    const dirs = [];
+    const addDir = (value) => {
+        const dir = trimShellLine(value);
+        if (!dir || dirs.includes(dir) || !fs.existsSync(dir)) return;
+        dirs.push(dir);
+    };
+
+    for (const line of readCommandLines('npm bin -g')) {
+        addDir(line);
+    }
+    for (const prefix of readCommandLines('npm config get prefix')) {
+        const cleanedPrefix = trimShellLine(prefix);
+        if (!cleanedPrefix || cleanedPrefix === 'undefined' || cleanedPrefix === 'null') continue;
+        if (process.platform === 'win32') {
+            addDir(cleanedPrefix);
+            addDir(path.join(cleanedPrefix, 'bin'));
+        } else {
+            addDir(path.join(cleanedPrefix, 'bin'));
+        }
+    }
+    npmGlobalBinDirsCache = dirs;
+    return dirs;
+}
+
+function getCommandNameCandidates(commandName) {
+    const base = normalizeModelId(commandName);
+    if (!base) return [];
+    if (process.platform !== 'win32') return [base];
+
+    const lower = base.toLowerCase();
+    const candidates = [base];
+    if (!lower.endsWith('.cmd')) candidates.push(`${base}.cmd`);
+    if (!lower.endsWith('.exe')) candidates.push(`${base}.exe`);
+    if (!lower.endsWith('.bat')) candidates.push(`${base}.bat`);
+    return candidates;
+}
+
+function getCliSearchDirs() {
+    const dirs = [];
+    const addDir = (value) => {
+        const dir = trimShellLine(value);
+        if (!dir || dirs.includes(dir)) return;
+        dirs.push(dir);
+    };
+
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+        addDir(dir);
+    }
+    for (const dir of getNpmGlobalBinDirs()) {
+        addDir(dir);
+    }
+    return dirs;
+}
+
+function resolveCommandPath(commandName) {
+    const normalizedCommand = normalizeModelId(commandName);
+    if (!normalizedCommand) return '';
+
+    const candidates = [];
+    const addCandidate = (value) => {
+        const candidate = trimShellLine(value);
+        if (!candidate || candidates.includes(candidate)) return;
+        candidates.push(candidate);
+    };
+
+    if (path.isAbsolute(normalizedCommand)) {
+        addCandidate(normalizedCommand);
+    }
+
+    const commandToken = path.basename(normalizedCommand);
+    if (commandToken) {
+        if (process.platform === 'win32') {
+            for (const found of readCommandLines(`where ${commandToken}`)) {
+                addCandidate(found);
+            }
+        } else {
+            for (const found of readCommandLines(`command -v ${commandToken}`)) {
+                addCandidate(found);
+            }
+            for (const found of readCommandLines(`which ${commandToken}`)) {
+                addCandidate(found);
+            }
+        }
+    }
+
+    const commandNames = getCommandNameCandidates(normalizedCommand);
+    for (const dir of getCliSearchDirs()) {
+        for (const name of commandNames) {
+            addCandidate(path.join(dir, name));
+        }
+    }
+
+    for (const candidate of candidates) {
+        if (isRunnableFile(candidate)) {
+            return candidate;
+        }
+    }
+    return '';
+}
+
+function shouldUseShellForCommand(commandPath) {
+    if (process.platform !== 'win32') return false;
+    const lower = String(commandPath || '').toLowerCase();
+    return lower.endsWith('.cmd') || lower.endsWith('.bat');
+}
+
+function getCliCheckArgs(tool) {
+    const tokens = splitCommandTokens(tool.checkCommand || '');
+    if (tokens.length === 0) return ['--version'];
+
+    const first = normalizeModelId(tokens[0]).toLowerCase();
+    const toolCommand = normalizeModelId(tool.command).toLowerCase();
+    const toolBase = path.basename(toolCommand);
+    if (first === toolCommand || path.basename(first) === toolBase) {
+        return tokens.slice(1);
+    }
+    return tokens;
 }
 
 function discoverGeminiExecutablePaths() {
@@ -756,10 +903,44 @@ async function checkToolAvailable(toolId) {
     }
 
     try {
-        execSync(tool.checkCommand, { stdio: 'pipe', timeout: 5000 });
+        const commandPath = resolveCommandPath(tool.command);
+        if (!commandPath) {
+            return {
+                available: false,
+                error:
+                    `${tool.command} executable not found. ` +
+                    `Ensure it is installed and available in PATH, then restart Spotify/terminal.`
+            };
+        }
+        const checkArgs = getCliCheckArgs(tool);
+        const result = spawnSync(commandPath, checkArgs, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            encoding: 'utf8',
+            timeout: 10000,
+            env: { ...process.env, NO_COLOR: '1' },
+            shell: shouldUseShellForCommand(commandPath),
+            windowsHide: true,
+        });
+
+        if (result.error) {
+            return {
+                available: false,
+                error: `${tool.command} check failed: ${result.error.message}`
+            };
+        }
+        if (result.status !== 0) {
+            const detail =
+                normalizeModelId(result.stderr) ||
+                normalizeModelId(result.stdout) ||
+                `exit code ${result.status}`;
+            return {
+                available: false,
+                error: `${tool.command} is installed but check command failed: ${detail}`
+            };
+        }
         return { available: true };
     } catch (e) {
-        return { available: false, error: `${tool.command} not found or not configured` };
+        return { available: false, error: `${tool.command} availability check failed: ${e.message}` };
     }
 }
 
@@ -1030,6 +1211,17 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
         }
         activeCLIProcesses++;
 
+        const commandPath = resolveCommandPath(tool.command);
+        if (!commandPath) {
+            activeCLIProcesses--;
+            return reject(
+                new Error(
+                    `Failed to locate ${tool.command} executable. ` +
+                    `Ensure it is installed and available in PATH.`
+                )
+            );
+        }
+
         const args = tool.buildArgs(prompt, model, tool.defaultModel);
         const actualModel = model || tool.defaultModel || 'default';
 
@@ -1038,13 +1230,15 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
         console.log(`\n${'='.repeat(60)}`);
         console.log(`[${toolId}] CLI REQUEST`);
         console.log(`  Model: ${actualModel}`);
-        console.log(`  Command: ${tool.command} ${argsForLog.join(' ')}`);
+        console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
         console.log(`${'='.repeat(60)}`);
 
-        const proc = spawn(tool.command, args, {
+        const proc = spawn(commandPath, args, {
             stdio: ['ignore', 'pipe', 'pipe'],
             cwd: os.tmpdir(),
-            env: { ...process.env, NO_COLOR: '1' }
+            env: { ...process.env, NO_COLOR: '1' },
+            shell: shouldUseShellForCommand(commandPath),
+            windowsHide: true,
         });
 
         let stdout = '';
@@ -1087,7 +1281,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
             activeCLIProcesses--;
             if (settled) return;
             settled = true;
-            reject(new Error(`Failed to start ${tool.command}: ${err.message}`));
+            reject(new Error(`Failed to start ${commandPath}: ${err.message}`));
         });
     });
 }
@@ -1201,6 +1395,17 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     }
     activeCLIProcesses++;
 
+    const commandPath = resolveCommandPath(tool.command);
+    if (!commandPath) {
+        activeCLIProcesses--;
+        sendSSEError(
+            res,
+            `Failed to locate ${tool.command} executable. Ensure it is installed and available in PATH.`
+        );
+        sendSSEDone(res);
+        return;
+    }
+
     const args = tool.buildArgs(prompt, model, tool.defaultModel);
     const actualModel = model || tool.defaultModel || 'default';
 
@@ -1209,13 +1414,15 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[${toolId}] CLI STREAM REQUEST`);
     console.log(`  Model: ${actualModel}`);
-    console.log(`  Command: ${tool.command} ${argsForLog.join(' ')}`);
+    console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
     console.log(`${'='.repeat(60)}`);
 
-    const proc = spawn(tool.command, args, {
+    const proc = spawn(commandPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         cwd: os.tmpdir(),
-        env: { ...process.env, NO_COLOR: '1' }
+        env: { ...process.env, NO_COLOR: '1' },
+        shell: shouldUseShellForCommand(commandPath),
+        windowsHide: true,
     });
 
     let stderr = '';
@@ -1271,7 +1478,7 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         activeCLIProcesses--;
         if (settled) return;
         settled = true;
-        sendSSEError(res, `Failed to start ${tool.command}: ${err.message}`);
+        sendSSEError(res, `Failed to start ${commandPath}: ${err.message}`);
         sendSSEDone(res);
     });
 }

@@ -483,7 +483,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             const health = await checkProxyHealth();
 
             if (!health.tools?.[TOOL_ID]?.available) {
-                throw new Error(`Claude Code CLI is not available. Make sure it's installed.`);
+                const detail = health.tools?.[TOOL_ID]?.error
+                    ? ` (${health.tools[TOOL_ID].error})`
+                    : '';
+                throw new Error(`Claude Code CLI is not available${detail}`);
             }
 
             await callProxy('Say "OK" if you receive this.');
