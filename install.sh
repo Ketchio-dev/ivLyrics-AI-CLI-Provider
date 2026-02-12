@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh - macOS/Linux installer for ivLyrics AI CLI Provider addons
+# install.sh - macOS/Linux installer for ivLyrics AI CLI Provider addons/proxy
 # Compatible with bash 3.2+ (macOS default)
 
 set -euo pipefail
@@ -8,13 +8,14 @@ REPO_BASE="https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 SPICETIFY_CONFIG="$HOME/.config/spicetify"
 IVLYRICS_APP="$SPICETIFY_CONFIG/CustomApps/ivLyrics"
 IVLYRICS_DATA="$SPICETIFY_CONFIG/ivLyrics"
-CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
 MANIFEST="$IVLYRICS_APP/manifest.json"
 ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
+CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
 
 ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
 ADDON_LABELS="Claude Code;Codex CLI;Gemini CLI"
-PROXY_FILES="server.js package.json spotify-with-proxy.sh spotify-with-proxy.ps1 .env.example"
+PROXY_FILES="server.js package.json README.md spotify-with-proxy.sh spotify-with-proxy.ps1 .env.example scripts/cleanup-gemini-oauth-env.sh scripts/cleanup-gemini-oauth-env.ps1"
+NO_NPM_INSTALL=0
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -27,14 +28,26 @@ err()   { printf '\033[1;31m[ERROR]\033[0m %s\n' "$1" >&2; }
 
 preflight() {
     if ! command -v curl >/dev/null 2>&1; then
-        err "curl is required but not found."; exit 1
+        err "curl is required but not found."
+        exit 1
     fi
+
+    if ! command -v npm >/dev/null 2>&1; then
+        warn "npm not found in PATH. Proxy dependencies will not be installed automatically."
+        HAS_NPM=0
+    else
+        HAS_NPM=1
+    fi
+
     if ! command -v spicetify >/dev/null 2>&1; then
         warn "spicetify not found in PATH. 'spicetify apply' will be skipped."
         HAS_SPICETIFY=0
     else
         HAS_SPICETIFY=1
     fi
+}
+
+ensure_ivlyrics_ready() {
     if [ ! -d "$IVLYRICS_APP" ]; then
         err "ivLyrics not found at $IVLYRICS_APP"
         err "Please install ivLyrics first: https://github.com/ivLis-STUDIO/ivLyrics"
@@ -122,6 +135,8 @@ install_addon() {
     local filename
     filename=$(basename "$url")
 
+    ensure_ivlyrics_ready
+
     if [ "${filename%.js}" = "$filename" ]; then
         err "URL must point to a .js file: $url"
         return 1
@@ -140,6 +155,41 @@ install_addon() {
     ok "Updated addon_sources.json"
 
     add_manifest_entry "$filename"
+}
+
+install_proxy() {
+    info "Installing proxy files to $CLI_PROXY_DIR ..."
+    mkdir -p "$CLI_PROXY_DIR/scripts"
+
+    for rel in $PROXY_FILES; do
+        local dest="$CLI_PROXY_DIR/$rel"
+        mkdir -p "$(dirname "$dest")"
+        info "Downloading cli-proxy/$rel ..."
+        if ! curl -fsSL "$REPO_BASE/cli-proxy/$rel" -o "$dest"; then
+            err "Failed to download cli-proxy/$rel"
+            return 1
+        fi
+    done
+
+    chmod +x "$CLI_PROXY_DIR/spotify-with-proxy.sh" 2>/dev/null || true
+    chmod +x "$CLI_PROXY_DIR/scripts/cleanup-gemini-oauth-env.sh" 2>/dev/null || true
+    ok "Proxy files installed."
+
+    if [ "$NO_NPM_INSTALL" -eq 1 ]; then
+        warn "Skipped npm install (--no-npm-install)."
+        return 0
+    fi
+
+    if [ "$HAS_NPM" -eq 1 ]; then
+        info "Running npm install in $CLI_PROXY_DIR ..."
+        if (cd "$CLI_PROXY_DIR" && npm install); then
+            ok "Proxy dependencies installed."
+        else
+            warn "npm install failed. Run manually: cd \"$CLI_PROXY_DIR\" && npm install"
+        fi
+    else
+        warn "Run manually after installing Node.js: cd \"$CLI_PROXY_DIR\" && npm install"
+    fi
 }
 
 # ── selection menu ───────────────────────────────────────────────────────────
@@ -163,17 +213,29 @@ show_menu() {
     IFS="$IFS_BAK"
 
     echo "  a) Install all"
+    echo "  p) Install proxy only"
+    echo "  f) Full install (all addons + proxy)"
     echo "  q) Quit"
     echo ""
-    printf "Select addons to install (e.g. 1 3, a for all): "
+    printf "Select action (e.g. 1 3, a, p, f): "
     read -r selection
 
     if [ "$selection" = "q" ] || [ "$selection" = "Q" ]; then
-        echo "Cancelled."; exit 0
+        echo "Cancelled."
+        exit 0
     fi
 
     if [ "$selection" = "a" ] || [ "$selection" = "A" ]; then
         install_all
+        return
+    fi
+    if [ "$selection" = "p" ] || [ "$selection" = "P" ]; then
+        install_proxy
+        return
+    fi
+    if [ "$selection" = "f" ] || [ "$selection" = "F" ]; then
+        install_all
+        install_proxy
         return
     fi
 
@@ -199,104 +261,72 @@ install_all() {
     done
 }
 
-# ── proxy server install ────────────────────────────────────────────────────
-
-install_proxy() {
-    if [ -f "$CLI_PROXY_DIR/server.js" ] && [ -f "$CLI_PROXY_DIR/package.json" ]; then
-        info "Proxy server already installed at $CLI_PROXY_DIR"
-        printf "  Reinstall / update? (y/N): "
-        read -r reinstall
-        case "$reinstall" in
-            y|Y|yes|YES) ;;
-            *) info "Skipping proxy server install."; return 0 ;;
-        esac
-    fi
-
-    if ! command -v node >/dev/null 2>&1; then
-        err "Node.js is required but not found."
-        err "Install from: https://nodejs.org/"
-        return 1
-    fi
-
-    if ! command -v npm >/dev/null 2>&1; then
-        err "npm is required but not found."
-        return 1
-    fi
-
-    mkdir -p "$CLI_PROXY_DIR"
-
-    info "Downloading proxy server files..."
-    for file in $PROXY_FILES; do
-        if ! curl -fsSL "$REPO_BASE/cli-proxy/$file" -o "$CLI_PROXY_DIR/$file"; then
-            err "Failed to download $file"
-            return 1
-        fi
-    done
-    chmod +x "$CLI_PROXY_DIR/spotify-with-proxy.sh"
-    ok "Downloaded proxy server → $CLI_PROXY_DIR"
-
-    info "Installing dependencies (npm install)..."
-    if (cd "$CLI_PROXY_DIR" && npm install --silent); then
-        ok "Dependencies installed"
-    else
-        err "npm install failed"
-        return 1
-    fi
-
-    echo ""
-    ok "Proxy server installed!"
-    echo ""
-    info "To start the server:"
-    echo "  cd $CLI_PROXY_DIR && npm start"
-    echo ""
-    info "To auto-start with Spotify (macOS):"
-    echo "  $CLI_PROXY_DIR/spotify-with-proxy.sh"
-}
-
-ask_install_proxy() {
-    echo ""
-    echo "────────────────────────────────────────"
-    info "Proxy server is required for addons to work."
-    if [ -f "$CLI_PROXY_DIR/server.js" ]; then
-        info "(Proxy server is already installed at $CLI_PROXY_DIR)"
-    fi
-    printf "  Install proxy server? (Y/n): "
-    read -r answer
-    case "$answer" in
-        n|N|no|NO) info "Skipping proxy server. You can install it later manually." ;;
-        *) install_proxy ;;
-    esac
-}
-
 # ── main ─────────────────────────────────────────────────────────────────────
 
 main() {
     preflight
+    local arg_count="$#"
+    local install_addons_flag=0
+    local install_proxy_flag=0
+    local custom_urls=""
 
-    if [ $# -eq 0 ]; then
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --all|-a)
+                install_addons_flag=1
+                ;;
+            --proxy|-p)
+                install_proxy_flag=1
+                ;;
+            --full|-f)
+                install_addons_flag=1
+                install_proxy_flag=1
+                ;;
+            --no-npm-install)
+                NO_NPM_INSTALL=1
+                ;;
+            --help|-h)
+                echo "Usage: bash install.sh [OPTIONS]"
+                echo ""
+                echo "Options:"
+                echo "  (no args)           Interactive selection menu"
+                echo "  --all, -a           Install all addons"
+                echo "  --proxy, -p         Install proxy only"
+                echo "  --full, -f          Install all addons + proxy"
+                echo "  --no-npm-install    Skip npm install in proxy directory"
+                echo "  --help, -h          Show this help"
+                echo "  <URL>               Install addon from URL"
+                exit 0
+                ;;
+            *)
+                custom_urls="$custom_urls
+$1"
+                ;;
+        esac
+        shift
+    done
+
+    if [ "$arg_count" -eq 0 ]; then
         show_menu
-    elif [ "$1" = "--all" ] || [ "$1" = "-a" ]; then
-        install_all
-    elif [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-        echo "Usage: bash install.sh [OPTIONS]"
-        echo ""
-        echo "Options:"
-        echo "  (no args)       Interactive selection menu"
-        echo "  --all, -a       Install all addons"
-        echo "  --proxy-only    Install proxy server only (skip addons)"
-        echo "  --help, -h      Show this help"
-        echo "  <URL>           Install addon from URL"
-        exit 0
-    elif [ "$1" = "--proxy-only" ]; then
-        install_proxy
-        echo ""
-        ok "Installation complete!"
-        exit 0
     else
-        # treat each argument as a URL
-        for url in "$@"; do
-            install_addon "$url"
-        done
+        if [ "$install_addons_flag" -eq 1 ]; then
+            install_all
+        fi
+        if [ "$install_proxy_flag" -eq 1 ]; then
+            install_proxy
+        fi
+        if [ -n "$custom_urls" ]; then
+            local IFS_BAK="$IFS"
+            IFS=$'\n'
+            for url in $custom_urls; do
+                [ -z "$url" ] && continue
+                install_addon "$url"
+            done
+            IFS="$IFS_BAK"
+        fi
+        if [ "$install_addons_flag" -eq 0 ] && [ "$install_proxy_flag" -eq 0 ] && [ -z "$custom_urls" ]; then
+            show_menu
+        fi
     fi
 
     echo ""
@@ -309,15 +339,6 @@ main() {
         fi
     else
         warn "Run 'spicetify apply' manually to activate the addons."
-    fi
-
-    # stdin이 터미널일 때만 프록시 서버 설치를 물어봄 (파이프 실행 시 스킵)
-    if [ -t 0 ]; then
-        ask_install_proxy
-    else
-        echo ""
-        info "Proxy server was not installed (non-interactive mode)."
-        info "To install manually: cd ~/.config/spicetify/cli-proxy && npm install"
     fi
 
     echo ""
