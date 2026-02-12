@@ -80,34 +80,18 @@ curl -X POST http://localhost:19284/v1/chat/completions \
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `PORT` | `19284` | 서버 포트 |
-| `GEMINI_OAUTH_CLIENT_ID` | 빈 값 | Gemini OAuth Client ID (선택, 둘 다 지정할 때만 사용) |
-| `GEMINI_OAUTH_CLIENT_SECRET` | 빈 값 | Gemini OAuth Client Secret (선택, 둘 다 지정할 때만 사용) |
 
 ## Gemini SDK 인증
 
 Gemini는 SDK 방식이라 `gemini login`으로 생성되는 `oauth_creds.json`이 필요합니다.
 기본적으로 `oauth_creds.json`의 `client_id`/`client_secret`를 자동으로 사용합니다.
+`oauth_creds.json`에 위 값이 없으면 설치된 Gemini CLI 런타임에서 자동으로 가져옵니다.
 
 1. 최소 1회 로그인
 ```bash
 gemini
 ```
-2. 대부분의 경우 `GEMINI_OAUTH_CLIENT_ID`/`GEMINI_OAUTH_CLIENT_SECRET`를 `.env`에 설정하지 않아도 됩니다.
-3. 기존 `.env`에 위 두 키가 남아 있으면 정리 스크립트를 사용합니다.
-
-macOS / Linux:
-```bash
-bash scripts/cleanup-gemini-oauth-env.sh
-# 또는
-npm run cleanup:gemini-oauth-env
-```
-
-Windows PowerShell:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\cleanup-gemini-oauth-env.ps1
-# 또는
-npm run cleanup:gemini-oauth-env:windows
-```
+2. `~/.gemini/oauth_creds.json` 파일이 생성되어 있는지 확인합니다.
 
 ## 문제 해결
 

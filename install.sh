@@ -14,7 +14,7 @@ CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
 
 ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
 ADDON_LABELS="Claude Code;Codex CLI;Gemini CLI"
-PROXY_FILES="server.js package.json README.md spotify-with-proxy.sh spotify-with-proxy.ps1 .env.example scripts/cleanup-gemini-oauth-env.sh scripts/cleanup-gemini-oauth-env.ps1"
+PROXY_FILES="server.js package.json README.md spotify-with-proxy.sh spotify-with-proxy.ps1"
 NO_NPM_INSTALL=0
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ install_addon() {
 
 install_proxy() {
     info "Installing proxy files to $CLI_PROXY_DIR ..."
-    mkdir -p "$CLI_PROXY_DIR/scripts"
+    mkdir -p "$CLI_PROXY_DIR"
 
     for rel in $PROXY_FILES; do
         local dest="$CLI_PROXY_DIR/$rel"
@@ -172,7 +172,6 @@ install_proxy() {
     done
 
     chmod +x "$CLI_PROXY_DIR/spotify-with-proxy.sh" 2>/dev/null || true
-    chmod +x "$CLI_PROXY_DIR/scripts/cleanup-gemini-oauth-env.sh" 2>/dev/null || true
     ok "Proxy files installed."
 
     if [ "$NO_NPM_INSTALL" -eq 1 ]; then
