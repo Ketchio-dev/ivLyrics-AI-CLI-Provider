@@ -68,10 +68,7 @@ $ProxyFiles = @(
     "package.json",
     "README.md",
     "spotify-with-proxy.sh",
-    "spotify-with-proxy.ps1",
-    ".env.example",
-    "scripts/cleanup-gemini-oauth-env.sh",
-    "scripts/cleanup-gemini-oauth-env.ps1"
+    "spotify-with-proxy.ps1"
 )
 
 function Ensure-Dir([string]$Path) {

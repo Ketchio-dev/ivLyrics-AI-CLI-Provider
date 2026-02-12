@@ -46,24 +46,6 @@ function expandPath() {
 }
 expandPath();
 
-// .env 파일 로드 (dotenv 없이 직접 파싱)
-function loadEnv() {
-    try {
-        const envPath = path.join(__dirname, '.env');
-        const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-            const eqIdx = trimmed.indexOf('=');
-            if (eqIdx === -1) continue;
-            const key = trimmed.slice(0, eqIdx).trim().replace(/^export\s+/, '');
-            const val = trimmed.slice(eqIdx + 1).trim().replace(/^['"]|['"]$/g, '');
-            if (!process.env[key]) process.env[key] = val;
-        }
-    } catch {}
-}
-loadEnv();
-
 const app = express();
 const PORT = process.env.PORT || 19284;
 
@@ -172,13 +154,7 @@ app.use(express.json({ limit: '10mb' }));
 // Gemini SDK (Code Assist API)
 // ============================================
 
-// Gemini OAuth client
-// - If env vars are set as a pair, use them.
-// - Otherwise read client_id/client_secret from ~/.gemini/oauth_creds.json.
-const GEMINI_OAUTH_CLIENT_ID_ENV = (process.env.GEMINI_OAUTH_CLIENT_ID || '').trim();
-const GEMINI_OAUTH_CLIENT_SECRET_ENV = (process.env.GEMINI_OAUTH_CLIENT_SECRET || '').trim();
-const GEMINI_HAS_CUSTOM_OAUTH_ENV = Boolean(GEMINI_OAUTH_CLIENT_ID_ENV && GEMINI_OAUTH_CLIENT_SECRET_ENV);
-const GEMINI_HAS_PARTIAL_OAUTH_ENV = Boolean(GEMINI_OAUTH_CLIENT_ID_ENV || GEMINI_OAUTH_CLIENT_SECRET_ENV) && !GEMINI_HAS_CUSTOM_OAUTH_ENV;
+// Gemini OAuth client values are loaded from ~/.gemini/oauth_creds.json.
 const CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com/v1internal';
 const GEMINI_REASONING_OFF_CONFIG = Object.freeze({ thinkingConfig: { thinkingBudget: 0 } });
 const CLAUDE_REASONING_OFF_SYSTEM_PROMPT =
@@ -188,7 +164,6 @@ const CLAUDE_SAFE_DEFAULT_MODEL = 'claude-sonnet-4-5';
 
 let geminiAuth = null;       // OAuth2Client 캐시
 let geminiProjectId = null;  // Code Assist 프로젝트 ID 캐시
-let geminiOAuthSource = 'unset';
 
 function hasGeminiOAuthClientConfig(clientId, clientSecret) {
     return Boolean(
@@ -197,41 +172,212 @@ function hasGeminiOAuthClientConfig(clientId, clientSecret) {
     );
 }
 
-function geminiOAuthConfigSource() {
-    return geminiOAuthSource;
+let geminiCliOAuthDefaultsCache = null;
+
+function trimShellLine(value) {
+    return normalizeModelId(String(value || '').replace(/^"(.*)"$/, '$1'));
+}
+
+function readCommandLines(command) {
+    try {
+        const output = execSync(command, {
+            stdio: ['ignore', 'pipe', 'ignore']
+        }).toString();
+        return output
+            .split(/\r?\n/)
+            .map(trimShellLine)
+            .filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
+function discoverGeminiExecutablePaths() {
+    const candidates = process.platform === 'win32'
+        ? readCommandLines('where gemini')
+        : [
+            ...readCommandLines('command -v gemini'),
+            ...readCommandLines('which gemini')
+        ];
+    const unique = [];
+    for (const candidate of candidates) {
+        if (candidate && !unique.includes(candidate)) {
+            unique.push(candidate);
+        }
+    }
+    return unique;
+}
+
+function safeRealpath(filePath) {
+    try {
+        return fs.realpathSync(filePath);
+    } catch {
+        return '';
+    }
+}
+
+function getGeminiCliOAuthCandidateFiles() {
+    const files = [];
+    const addFile = (candidatePath) => {
+        const normalized = trimShellLine(candidatePath);
+        if (!normalized || files.includes(normalized)) return;
+        files.push(normalized);
+    };
+    const suffixes = [
+        path.join(
+            'libexec',
+            'lib',
+            'node_modules',
+            '@google',
+            'gemini-cli',
+            'node_modules',
+            '@google',
+            'gemini-cli-core',
+            'dist',
+            'src',
+            'code_assist',
+            'oauth2.js'
+        ),
+        path.join(
+            'lib',
+            'node_modules',
+            '@google',
+            'gemini-cli',
+            'node_modules',
+            '@google',
+            'gemini-cli-core',
+            'dist',
+            'src',
+            'code_assist',
+            'oauth2.js'
+        ),
+        path.join(
+            'node_modules',
+            '@google',
+            'gemini-cli',
+            'node_modules',
+            '@google',
+            'gemini-cli-core',
+            'dist',
+            'src',
+            'code_assist',
+            'oauth2.js'
+        ),
+    ];
+    const executablePaths = discoverGeminiExecutablePaths();
+    const roots = [];
+    const addRoot = (rootPath) => {
+        const normalized = trimShellLine(rootPath);
+        if (!normalized || roots.includes(normalized)) return;
+        roots.push(normalized);
+    };
+    const addRootChain = (startPath, maxDepth = 10) => {
+        let current = trimShellLine(startPath);
+        for (let depth = 0; depth < maxDepth; depth++) {
+            if (!current) break;
+            addRoot(current);
+            const parent = path.dirname(current);
+            if (!parent || parent === current) break;
+            current = parent;
+        }
+    };
+
+    for (const executablePath of executablePaths) {
+        addRootChain(path.dirname(executablePath));
+        const realPath = safeRealpath(executablePath);
+        if (realPath) {
+            addRootChain(path.dirname(realPath));
+        }
+    }
+
+    for (const root of roots) {
+        for (const suffix of suffixes) {
+            addFile(path.join(root, suffix));
+        }
+    }
+
+    return files;
+}
+
+function parseGeminiCliOAuthConstants(filePath) {
+    try {
+        if (!fs.existsSync(filePath)) return null;
+        const content = fs.readFileSync(filePath, 'utf8');
+        const clientIdMatch = content.match(/const\s+OAUTH_CLIENT_ID\s*=\s*['"]([^'"]+)['"]/);
+        const clientSecretMatch = content.match(/const\s+OAUTH_CLIENT_SECRET\s*=\s*['"]([^'"]+)['"]/);
+        const clientId = normalizeModelId(clientIdMatch?.[1] || '');
+        const clientSecret = normalizeModelId(clientSecretMatch?.[1] || '');
+        if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) return null;
+        return {
+            clientId,
+            clientSecret,
+            source: filePath,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function resolveGeminiCliOAuthDefaults() {
+    if (geminiCliOAuthDefaultsCache) {
+        return geminiCliOAuthDefaultsCache;
+    }
+
+    const candidates = getGeminiCliOAuthCandidateFiles();
+    for (const candidate of candidates) {
+        const parsed = parseGeminiCliOAuthConstants(candidate);
+        if (parsed) {
+            geminiCliOAuthDefaultsCache = parsed;
+            return parsed;
+        }
+    }
+
+    geminiCliOAuthDefaultsCache = {
+        clientId: '',
+        clientSecret: '',
+        source: '',
+    };
+    return geminiCliOAuthDefaultsCache;
+}
+
+function getGeminiCredsPath() {
+    return path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+}
+
+function readGeminiCredsFile() {
+    const credsPath = getGeminiCredsPath();
+    if (!fs.existsSync(credsPath)) {
+        throw new Error('Gemini OAuth credentials not found. Run `gemini` CLI first to authenticate.');
+    }
+    try {
+        const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+        return { credsPath, creds };
+    } catch {
+        throw new Error(`Gemini OAuth credentials are invalid JSON: ${credsPath}`);
+    }
 }
 
 function resolveGeminiOAuthClient(creds) {
-    if (GEMINI_HAS_CUSTOM_OAUTH_ENV) {
-        geminiOAuthSource = 'env';
-        return {
-            clientId: GEMINI_OAUTH_CLIENT_ID_ENV,
-            clientSecret: GEMINI_OAUTH_CLIENT_SECRET_ENV
-        };
-    }
-
-    if (GEMINI_HAS_PARTIAL_OAUTH_ENV) {
-        console.warn(
-            '[gemini] Incomplete GEMINI_OAUTH_* env vars detected; ' +
-            'ignoring env override and using oauth_creds.json values.'
-        );
-    }
-
     const credsClientId = normalizeModelId(creds?.client_id || creds?.clientId || '');
     const credsClientSecret = normalizeModelId(creds?.client_secret || creds?.clientSecret || '');
     if (hasGeminiOAuthClientConfig(credsClientId, credsClientSecret)) {
-        geminiOAuthSource = 'oauth_creds';
         return {
             clientId: credsClientId,
-            clientSecret: credsClientSecret
+            clientSecret: credsClientSecret,
+            source: 'oauth_creds'
         };
     }
 
-    geminiOAuthSource = 'missing';
-    return {
-        clientId: '',
-        clientSecret: ''
-    };
+    const defaults = resolveGeminiCliOAuthDefaults();
+    if (hasGeminiOAuthClientConfig(defaults.clientId, defaults.clientSecret)) {
+        return {
+            clientId: defaults.clientId,
+            clientSecret: defaults.clientSecret,
+            source: defaults.source ? `gemini-cli:${defaults.source}` : 'gemini-cli',
+        };
+    }
+
+    return { clientId: '', clientSecret: '', source: 'missing' };
 }
 
 function formatGeminiAuthError(error) {
@@ -245,13 +391,6 @@ function formatGeminiAuthError(error) {
     );
 
     if (oauthCode === 'invalid_request') {
-        if (geminiOAuthConfigSource() === 'env') {
-            return (
-                'Gemini OAuth token refresh failed (invalid_request). ' +
-                'Check GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET in cli-proxy/.env, ' +
-                'or remove both keys to use oauth_creds.json client values.'
-            );
-        }
         return (
             'Gemini OAuth token refresh failed (invalid_request). ' +
             'Run `gemini` CLI again to re-authenticate.'
@@ -311,18 +450,17 @@ function resolveClaudeModel(modelId, fallbackModel = CLAUDE_SAFE_DEFAULT_MODEL) 
  * Gemini OAuth 클라이언트 초기화 (토큰 자동 갱신)
  */
 function initGeminiAuth() {
-    const credsPath = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
-    if (!fs.existsSync(credsPath)) {
-        throw new Error('Gemini OAuth credentials not found. Run `gemini` CLI first to authenticate.');
-    }
-
-    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-    const { clientId, clientSecret } = resolveGeminiOAuthClient(creds);
+    const { credsPath, creds } = readGeminiCredsFile();
+    const { clientId, clientSecret, source } = resolveGeminiOAuthClient(creds);
     if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) {
         throw new Error(
-            'Gemini OAuth client config is empty. Set GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET ' +
-            'or run `gemini` CLI again to refresh oauth_creds.json.'
+            'Gemini OAuth client config could not be resolved. ' +
+            'Check that `gemini` CLI is installed, run `gemini` to re-authenticate, ' +
+            'and verify ~/.gemini/oauth_creds.json exists.'
         );
+    }
+    if (source && source !== 'oauth_creds') {
+        console.log(`[gemini] OAuth client loaded from ${source}`);
     }
 
     const { OAuth2Client } = require('google-auth-library');
@@ -554,9 +692,15 @@ const CLI_TOOLS = {
         },
         checkAvailable: async () => {
             try {
-                const credsPath = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
-                if (!fs.existsSync(credsPath)) {
-                    return { available: false, error: 'Gemini OAuth credentials not found' };
+                const { creds } = readGeminiCredsFile();
+                const { clientId, clientSecret } = resolveGeminiOAuthClient(creds);
+                if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) {
+                    return {
+                        available: false,
+                        error:
+                            'Gemini OAuth client config could not be resolved. ' +
+                            'Check gemini CLI installation and re-authenticate with `gemini`.'
+                    };
                 }
                 if (!geminiAuth) {
                     geminiAuth = initGeminiAuth();

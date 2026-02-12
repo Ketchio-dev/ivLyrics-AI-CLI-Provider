@@ -98,23 +98,7 @@ Gemini is handled in SDK mode and needs `oauth_creds.json` from Gemini CLI login
 
 1. Run `gemini` once and complete login.
 2. Ensure `~/.gemini/oauth_creds.json` exists.
-3. By default, client values are read from `oauth_creds.json`; `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET` are optional overrides.
-
-If old env keys are set and causing auth errors, use cleanup scripts:
-
-```bash
-# macOS / Linux
-bash scripts/cleanup-gemini-oauth-env.sh
-# or
-npm run cleanup:gemini-oauth-env
-```
-
-```powershell
-# Windows
-powershell -ExecutionPolicy Bypass -File .\scripts\cleanup-gemini-oauth-env.ps1
-# or
-npm run cleanup:gemini-oauth-env:windows
-```
+3. If `oauth_creds.json` lacks `client_id`/`client_secret`, proxy auto-resolves them from your installed Gemini CLI runtime.
 
 ## API endpoints
 
