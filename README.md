@@ -9,14 +9,63 @@ AI CLI Provider addons for [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics).
 | `Addon_AI_CLI_CodexCLI.js` | [Codex CLI](https://github.com/openai/codex) |
 | `Addon_AI_CLI_GeminiCLI.js` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
 
-## Installation
+## Quick Install (No git required)
 
-1. Open **ivLyrics** settings in Spotify
-2. Go to **Addons** section
-3. Search for "CLI Provider"
-4. Click **Install** on the provider you want to use
+### Windows (PowerShell, full install: addons + proxy)
 
-The addon and proxy server will be automatically installed and configured.
+```powershell
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Full
+```
+
+### macOS / Linux (full install: addons + proxy)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --full
+```
+
+### Install options
+
+Windows:
+```powershell
+# Addons only
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -All
+
+# Proxy only
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy
+```
+
+macOS / Linux:
+```bash
+# Addons only
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --all
+
+# Proxy only
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy
+```
+
+Install a single addon URL:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_ClaudeCode.js"
+```
+
+## Uninstall (No git required)
+
+Windows:
+```powershell
+# Full uninstall (addons + proxy)
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/uninstall.ps1").Content)) -Full
+# Addons only: -Addons
+# Proxy only: -Proxy
+```
+
+macOS / Linux:
+```bash
+# Full uninstall (addons + proxy)
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/uninstall.sh | bash -s -- --full
+# Addons only: --addons
+# Proxy only: --proxy
+```
 
 ## Prerequisites
 
