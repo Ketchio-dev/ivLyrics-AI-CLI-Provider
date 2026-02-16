@@ -1,0 +1,37 @@
+{
+  "addons": [
+    {
+      "name": "Claude Code CLI Provider",
+      "type": "ai",
+      "version": "1.1.0",
+      "updated": "2025-02-14",
+      "description": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/README.md",
+      "githubUrl": "https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider",
+      "preview": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/previews/claude_code_provider.png",
+      "downloadUrl": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_ClaudeCode.js",
+      "minAppVersion": "4.0.0"
+    },
+    {
+      "name": "Codex CLI Provider",
+      "type": "ai",
+      "version": "1.1.0",
+      "updated": "2025-02-14",
+      "description": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/README.md",
+      "githubUrl": "https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider",
+      "preview": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/previews/codex_cli_provider.png",
+      "downloadUrl": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_CodexCLI.js",
+      "minAppVersion": "4.0.0"
+    },
+    {
+      "name": "Gemini CLI Provider",
+      "type": "ai",
+      "version": "1.1.0",
+      "updated": "2025-02-14",
+      "description": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/README.md",
+      "githubUrl": "https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider",
+      "preview": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/previews/gemini_cli_provider.png",
+      "downloadUrl": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_GeminiCLI.js",
+      "minAppVersion": "4.0.0"
+    }
+  ]
+}
