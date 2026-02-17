@@ -9,7 +9,7 @@ AI CLI Provider addons for [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics).
 | `Addon_AI_CLI_CodexCLI.js` | [Codex CLI](https://github.com/openai/codex) |
 | `Addon_AI_CLI_GeminiCLI.js` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
 
-## Quick Install (No git required)
+## Quick Install
 
 ### Windows (PowerShell, full install: addons + proxy)
 
@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 ```
 
 
-## Uninstall (No git required)
+## Uninstall
 
 Windows:
 ```powershell
