@@ -95,23 +95,6 @@ curl -N -X POST http://localhost:19284/generate \
   -d '{"tool":"claude","prompt":"Say hello","stream":true}'
 ```
 
-## Auto-update
-
-```bash
-# Check for updates
-curl http://localhost:19284/updates
-
-# Force re-check (ignore cache)
-curl http://localhost:19284/updates?force=1
-
-# Apply addon updates
-curl -X POST http://localhost:19284/update \
-  -H 'Content-Type: application/json' \
-  -d '{"target":"addons"}'
-```
-
-`target`: `addons`, `proxy`, `all`, or a specific filename.
-
 ## License
 
 MIT
