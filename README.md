@@ -75,25 +75,6 @@ Gemini is handled in SDK mode and needs `oauth_creds.json` from Gemini CLI login
 2. Ensure `~/.gemini/oauth_creds.json` exists.
 3. If `oauth_creds.json` lacks `client_id`/`client_secret`, proxy auto-resolves them from your installed Gemini CLI runtime.
 
-## API endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Server status |
-| GET | `/tools` | Available CLI tools |
-| GET | `/models` | Models for each tool |
-| POST | `/generate` | Text generation (supports SSE stream) |
-| GET | `/updates` | Check updates |
-| POST | `/update` | Apply updates |
-| POST | `/v1/chat/completions` | OpenAI-compatible endpoint |
-
-Example:
-
-```bash
-curl -N -X POST http://localhost:19284/generate \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"claude","prompt":"Say hello","stream":true}'
-```
 
 ## License
 
