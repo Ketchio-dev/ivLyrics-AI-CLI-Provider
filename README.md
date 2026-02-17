@@ -28,18 +28,12 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 
 Windows:
 ```powershell
-# Full uninstall (addons + proxy)
 & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/uninstall.ps1").Content)) -Full
-# Addons only: -Addons
-# Proxy only: -Proxy
 ```
 
 macOS / Linux:
 ```bash
-# Full uninstall (addons + proxy)
 curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/uninstall.sh | bash -s -- --full
-# Addons only: --addons
-# Proxy only: --proxy
 ```
 
 ## Prerequisites
