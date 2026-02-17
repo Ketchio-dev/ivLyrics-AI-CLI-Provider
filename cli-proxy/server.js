@@ -50,6 +50,51 @@ const app = express();
 const PORT = process.env.PORT || 19284;
 
 // ============================================
+// Constants
+// ============================================
+
+const DEFAULT_TIMEOUT_MS = 120000;        // Default CLI process timeout
+const TOOL_CHECK_TIMEOUT_MS = 10000;      // Tool availability check timeout (spawnSync)
+const HEALTH_CHECK_TIMEOUT_MS = 12000;    // Per-tool timeout in /health endpoint
+const MAX_RETRY_WAIT_MS = 30000;          // Max wait per 429 rate-limit retry
+const GEMINI_PROJECT_ID_TTL_MS = 86400000; // Project ID cache TTL (24 hours)
+const RATE_LIMIT_WINDOW_MS = 60000;       // Rate limit window (1 minute)
+const RATE_LIMIT_MAX_REQUESTS = 120;      // Max /generate requests per window
+const UPDATE_CACHE_MAX_SIZE = 1048576;    // 1MB — skip cache if result is larger
+
+// ============================================
+// File Logger (rotation at 5MB, keeps 1 backup)
+// ============================================
+
+const LOG_DIR = path.join(__dirname, 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'server.log');
+const LOG_PREV_FILE = path.join(LOG_DIR, 'server.1.log');
+const LOG_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+
+function writeLog(level, args) {
+    const timestamp = new Date().toISOString();
+    const message = args.map(a => (a instanceof Error ? a.stack || a.message : typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+    const line = `[${timestamp}] [${level}] ${message}\n`;
+    try {
+        if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+        try {
+            if (fs.statSync(LOG_FILE).size > LOG_MAX_SIZE_BYTES) {
+                if (fs.existsSync(LOG_PREV_FILE)) fs.unlinkSync(LOG_PREV_FILE);
+                fs.renameSync(LOG_FILE, LOG_PREV_FILE);
+            }
+        } catch { /* log file not yet created */ }
+        fs.appendFileSync(LOG_FILE, line);
+    } catch { /* logging failure must not crash the server */ }
+}
+
+const _consoleLog = console.log.bind(console);
+const _consoleWarn = console.warn.bind(console);
+const _consoleError = console.error.bind(console);
+console.log = (...args) => { _consoleLog(...args); writeLog('INFO', args); };
+console.warn = (...args) => { _consoleWarn(...args); writeLog('WARN', args); };
+console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); };
+
+// ============================================
 // Version & Auto-Update
 // ============================================
 
@@ -138,7 +183,12 @@ async function checkForUpdates(force = false) {
         result.hasUpdates = !!(result.proxy || Object.keys(result.addons).length > 0);
         result.checkedAt = new Date().toISOString();
 
-        updateCache = { data: result, ts: now };
+        const resultSize = JSON.stringify(result).length;
+        if (resultSize < UPDATE_CACHE_MAX_SIZE) {
+            updateCache = { data: result, ts: now };
+        } else {
+            console.warn(`[update] Result too large (${resultSize} bytes), skipping cache`);
+        }
         return result;
     } catch (e) {
         console.warn('[update] Failed to check for updates:', e.message);
@@ -146,9 +196,33 @@ async function checkForUpdates(force = false) {
     }
 }
 
-// CORS 전면 허용 (서버는 127.0.0.1에만 바인딩하여 외부 접근 차단)
-app.use(cors());
+// CORS를 localhost 및 Spicetify 컨텍스트로 제한 (서버는 127.0.0.1에만 바인딩)
+const ALLOWED_ORIGINS = /^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$|sp:\/\/|file:\/\/)/;
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || ALLOWED_ORIGINS.test(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('CORS: Origin not allowed'));
+        }
+    }
+}));
 app.use(express.json({ limit: '10mb' }));
+
+// Rate limiter state for /generate endpoint
+let rateLimitCount = 0;
+let rateLimitWindowStart = Date.now();
+
+function checkRateLimit() {
+    const now = Date.now();
+    if (now - rateLimitWindowStart > RATE_LIMIT_WINDOW_MS) {
+        rateLimitCount = 0;
+        rateLimitWindowStart = now;
+    }
+    if (rateLimitCount >= RATE_LIMIT_MAX_REQUESTS) return false;
+    rateLimitCount++;
+    return true;
+}
 
 // ============================================
 // Gemini SDK (Code Assist API)
@@ -162,14 +236,14 @@ const CLAUDE_REASONING_OFF_SYSTEM_PROMPT =
     'Return concise final answers without chain-of-thought or step-by-step deliberation.';
 const CLAUDE_SAFE_DEFAULT_MODEL = 'claude-sonnet-4-5';
 
-let geminiAuth = null;       // OAuth2Client 캐시
-let geminiProjectId = null;  // Code Assist 프로젝트 ID 캐시
+let geminiAuth = null;          // OAuth2Client 캐시
+let geminiProjectId = null;     // Code Assist 프로젝트 ID 캐시
+let geminiProjectIdTs = 0;      // 프로젝트 ID 캐시 타임스탬프
 
 function hasGeminiOAuthClientConfig(clientId, clientSecret) {
-    return Boolean(
-        normalizeModelId(clientId) &&
-        normalizeModelId(clientSecret)
-    );
+    const id = normalizeModelId(clientId);
+    const secret = normalizeModelId(clientSecret);
+    return Boolean(id && secret && id.length >= 8 && secret.length >= 8);
 }
 
 let geminiCliOAuthDefaultsCache = null;
@@ -637,10 +711,13 @@ function initGeminiAuth() {
 }
 
 /**
- * Code Assist 프로젝트 ID 가져오기 (최초 1회, 이후 캐시)
+ * Code Assist 프로젝트 ID 가져오기 (TTL 기반 캐시, 기본 24시간)
  */
 async function getGeminiProjectId(token) {
-    if (geminiProjectId) return geminiProjectId;
+    const now = Date.now();
+    if (geminiProjectId && (now - geminiProjectIdTs) < GEMINI_PROJECT_ID_TTL_MS) {
+        return geminiProjectId;
+    }
 
     const response = await fetch(`${CODE_ASSIST_ENDPOINT}:loadCodeAssist`, {
         method: 'POST',
@@ -663,6 +740,7 @@ async function getGeminiProjectId(token) {
 
     const data = await response.json();
     geminiProjectId = data.cloudaicompanionProject;
+    geminiProjectIdTs = Date.now();
     if (!geminiProjectId) {
         throw new Error('No project ID from Code Assist. Run `gemini` CLI to complete setup.');
     }
@@ -743,10 +821,10 @@ async function geminiGenerateContentInner(prompt, model) {
             }),
         });
 
-        // Rate limit → wait and retry
+        // Rate limit → wait and retry (capped at MAX_RETRY_WAIT_MS)
         if (response.status === 429) {
             const retryAfter = parseInt(response.headers.get('retry-after') || '0', 10);
-            const waitMs = Math.max(retryAfter * 1000, 2000 * (attempt + 1));
+            const waitMs = Math.min(Math.max(retryAfter * 1000, 2000 * (attempt + 1)), MAX_RETRY_WAIT_MS);
             console.warn(`[gemini] Rate limited (429), waiting ${waitMs}ms before retry ${attempt + 1}/${MAX_RETRIES}`);
             await new Promise(r => setTimeout(r, waitMs));
             continue;
@@ -770,7 +848,7 @@ async function geminiGenerateContentInner(prompt, model) {
                 });
 
                 if (response.status === 429) {
-                    const waitMs = 2000 * (attempt + 1);
+                    const waitMs = Math.min(2000 * (attempt + 1), MAX_RETRY_WAIT_MS);
                     console.warn(`[gemini] Rate limited (429) on fallback, waiting ${waitMs}ms`);
                     await new Promise(r => setTimeout(r, waitMs));
                     continue;
@@ -916,7 +994,7 @@ async function checkToolAvailable(toolId) {
         const result = spawnSync(commandPath, checkArgs, {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf8',
-            timeout: 10000,
+            timeout: TOOL_CHECK_TIMEOUT_MS,
             env: { ...process.env, NO_COLOR: '1' },
             shell: shouldUseShellForCommand(commandPath),
             windowsHide: true,
@@ -1199,7 +1277,7 @@ let activeCLIProcesses = 0;
 /**
  * CLI 도구 실행 (spawn 방식)
  */
-function runCLI(toolId, prompt, model = '', timeout = 120000) {
+function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
     return new Promise((resolve, reject) => {
         const tool = CLI_TOOLS[toolId];
         if (!tool) {
@@ -1244,14 +1322,41 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
         let stdout = '';
         let stderr = '';
         let settled = false;
+        let processDecremented = false;
+
+        const decrementOnce = () => {
+            if (!processDecremented) {
+                processDecremented = true;
+                activeCLIProcesses--;
+            }
+        };
 
         const timer = setTimeout(() => {
             if (!settled) {
                 settled = true;
+                decrementOnce();
                 proc.kill('SIGKILL');
                 reject(new Error(`Timeout after ${timeout}ms`));
             }
         }, timeout);
+
+        // Kill process if client disconnects before response
+        if (signal) {
+            const onAbort = () => {
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(timer);
+                    decrementOnce();
+                    proc.kill('SIGKILL');
+                    reject(new Error('Request aborted by client'));
+                }
+            };
+            if (signal.aborted) {
+                onAbort();
+                return;
+            }
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
 
         proc.stdout.on('data', (data) => {
             stdout += data.toString();
@@ -1263,7 +1368,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
 
         proc.on('close', (code) => {
             clearTimeout(timer);
-            activeCLIProcesses--;
+            decrementOnce();
             if (settled) return;
             settled = true;
             if (code === 0) {
@@ -1278,7 +1383,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000) {
 
         proc.on('error', (err) => {
             clearTimeout(timer);
-            activeCLIProcesses--;
+            decrementOnce();
             if (settled) return;
             settled = true;
             reject(new Error(`Failed to start ${commandPath}: ${err.message}`));
@@ -1319,7 +1424,7 @@ async function runSDK(toolId, prompt, model = '', timeout = 120000) {
 /**
  * 통합 실행 함수 (mode에 따라 CLI 또는 SDK 선택)
  */
-async function runTool(toolId, prompt, model = '', timeout = 120000) {
+async function runTool(toolId, prompt, model = '', timeout = 120000, signal = null) {
     const tool = CLI_TOOLS[toolId];
     if (!tool) {
         throw new Error(`Unknown tool: ${toolId}`);
@@ -1328,7 +1433,7 @@ async function runTool(toolId, prompt, model = '', timeout = 120000) {
     if (tool.mode === 'sdk') {
         return await runSDK(toolId, prompt, model, timeout);
     } else {
-        return await runCLI(toolId, prompt, model, timeout);
+        return await runCLI(toolId, prompt, model, timeout, signal);
     }
 }
 
@@ -1525,7 +1630,14 @@ function runToolStream(toolId, prompt, model, timeout, res) {
 app.get('/health', async (req, res) => {
     const toolIds = Object.keys(CLI_TOOLS);
     const results = await Promise.allSettled(
-        toolIds.map(toolId => checkToolAvailable(toolId))
+        toolIds.map(toolId =>
+            Promise.race([
+                checkToolAvailable(toolId),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Health check timed out')), HEALTH_CHECK_TIMEOUT_MS)
+                )
+            ])
+        )
     );
 
     const tools = {};
@@ -1610,12 +1722,30 @@ app.post('/generate', async (req, res) => {
         return res.status(400).json({ error: 'Missing tool or prompt' });
     }
 
+    // Model ID validation
+    const normalizedModel = normalizeModelId(model || '');
+    if (normalizedModel) {
+        if (normalizedModel.length > 200) {
+            return res.status(400).json({ error: 'Model ID too long (max 200 chars)' });
+        }
+        if (!/^[\w\-.]+$/.test(normalizedModel)) {
+            return res.status(400).json({ error: 'Invalid model ID: only alphanumeric, hyphens, underscores, and dots allowed' });
+        }
+    }
+
+    // Rate limiting
+    if (!checkRateLimit()) {
+        return res.status(429).json({ error: `Rate limit exceeded. Max ${RATE_LIMIT_MAX_REQUESTS} requests per minute.` });
+    }
+
     const toolStatus = await checkToolAvailable(tool);
     if (!toolStatus.available) {
         return res.status(400).json({ error: toolStatus.error });
     }
 
-    const effectiveTimeout = timeout || 120000;
+    const effectiveTimeout = timeout
+        ? Math.max(5000, Math.min(600000, Number(timeout) || DEFAULT_TIMEOUT_MS))
+        : DEFAULT_TIMEOUT_MS;
 
     if (streamEnabled) {
         console.log(`[API] Stream request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${model || 'default'}, prompt length: ${prompt.length}`);
@@ -1624,23 +1754,33 @@ app.post('/generate', async (req, res) => {
         return;
     }
 
+    // Abort CLI process if client disconnects before response is sent
+    const ac = new AbortController();
+    req.on('close', () => {
+        if (!res.writableEnded) ac.abort();
+    });
+
     try {
         console.log(`[API] Generate request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${model || 'default'}, prompt length: ${prompt.length}`);
         const startTime = Date.now();
-        const result = await runTool(tool, prompt, model || '', effectiveTimeout);
+        const result = await runTool(tool, prompt, model || '', effectiveTimeout, ac.signal);
         const elapsed = Date.now() - startTime;
         console.log(`[API] Completed in ${elapsed}ms`);
-        res.json({
-            success: true,
-            result,
-            tool,
-            mode: CLI_TOOLS[tool]?.mode,
-            model: model || CLI_TOOLS[tool]?.defaultModel || 'default',
-            elapsed_ms: elapsed
-        });
+        if (!res.writableEnded) {
+            res.json({
+                success: true,
+                result,
+                tool,
+                mode: CLI_TOOLS[tool]?.mode,
+                model: model || CLI_TOOLS[tool]?.defaultModel || 'default',
+                elapsed_ms: elapsed
+            });
+        }
     } catch (e) {
         console.error(`[API] Error:`, e.message);
-        res.status(500).json({ error: e.message });
+        if (!res.writableEnded) {
+            res.status(500).json({ error: e.message });
+        }
     }
 });
 
@@ -1815,6 +1955,46 @@ app.post('/v1/chat/completions', async (req, res) => {
     } catch (e) {
         res.status(500).json({ error: { message: e.message } });
     }
+});
+
+// ============================================
+// Graceful Shutdown
+// ============================================
+
+let isShuttingDown = false;
+
+function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n[server] ${signal} received. Waiting for in-flight requests...`);
+
+    const forceExit = setTimeout(() => {
+        console.warn('[server] Forced shutdown after 30s timeout.');
+        process.exit(1);
+    }, 30000);
+    forceExit.unref();
+
+    const waitAndExit = () => {
+        if (activeCLIProcesses <= 0) {
+            console.log('[server] Shutdown complete.');
+            process.exit(0);
+        } else {
+            console.log(`[server] Waiting for ${activeCLIProcesses} CLI process(es)...`);
+            setTimeout(waitAndExit, 300);
+        }
+    };
+    waitAndExit();
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Reject new /generate requests during shutdown
+app.use('/generate', (req, res, next) => {
+    if (isShuttingDown) {
+        return res.status(503).json({ error: 'Server is shutting down. Please retry.' });
+    }
+    next();
 });
 
 // ============================================

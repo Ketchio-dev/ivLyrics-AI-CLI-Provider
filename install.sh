@@ -45,6 +45,16 @@ preflight() {
     else
         HAS_SPICETIFY=1
     fi
+
+    if command -v node >/dev/null 2>&1; then
+        local node_ver
+        node_ver=$(node --version 2>/dev/null | sed 's/^v//')
+        local node_major
+        node_major=$(echo "$node_ver" | cut -d. -f1)
+        if [ -n "$node_major" ] && [ "$node_major" -lt 18 ] 2>/dev/null; then
+            warn "Node.js v${node_ver} detected. v18+ is required for the CLI proxy."
+        fi
+    fi
 }
 
 ensure_ivlyrics_ready() {
@@ -242,6 +252,14 @@ show_menu() {
     addon_list=$(echo "$ADDONS" | tr ' ' '\n')
 
     for num in $selection; do
+        # Validate: must be a positive integer in range 1-3
+        case "$num" in
+            [1-3]) ;;
+            *)
+                warn "Invalid selection: $num (enter 1-3)"
+                continue
+                ;;
+        esac
         local addon
         addon=$(echo "$addon_list" | sed -n "${num}p")
         if [ -z "$addon" ]; then

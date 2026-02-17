@@ -32,6 +32,12 @@ $AddonsList = @(
     "Addon_AI_CLI_GeminiCLI.js"
 )
 
+function Ensure-Dir([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+}
+
 function Read-JsonMap([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) {
         return @{}
@@ -40,7 +46,12 @@ function Read-JsonMap([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($raw)) {
         return @{}
     }
-    $obj = ConvertFrom-Json -InputObject $raw
+    try {
+        $obj = ConvertFrom-Json -InputObject $raw
+    } catch {
+        Write-Warn "Failed to parse JSON: $Path"
+        return @{}
+    }
     $map = @{}
     foreach ($prop in $obj.PSObject.Properties) {
         $map[$prop.Name] = $prop.Value
@@ -49,6 +60,7 @@ function Read-JsonMap([string]$Path) {
 }
 
 function Write-JsonMap([string]$Path, [hashtable]$Map) {
+    Ensure-Dir (Split-Path -Parent $Path)
     (($Map | ConvertTo-Json -Depth 20) + "`n") | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
@@ -68,7 +80,12 @@ function Remove-ManifestEntry([string]$Entry) {
     if (-not (Test-Path -LiteralPath $Manifest)) {
         return
     }
-    $manifestObj = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+    try {
+        $manifestObj = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+    } catch {
+        Write-Warn "Failed to parse manifest.json, skipping entry removal: $Entry"
+        return
+    }
     if ($null -eq $manifestObj.subfiles_extension) {
         return
     }

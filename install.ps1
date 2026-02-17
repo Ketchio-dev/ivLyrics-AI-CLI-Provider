@@ -189,6 +189,18 @@ function Install-Proxy {
     }
 }
 
+# Pre-flight: Node.js version check
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+if ($null -ne $nodeCmd) {
+    try {
+        $nodeVer = (node --version 2>$null) -replace '^v', ''
+        $nodeMajor = [int]($nodeVer -split '\.')[0]
+        if ($nodeMajor -lt 18) {
+            Write-Warn "Node.js v$nodeVer detected. v18+ is required for the CLI proxy."
+        }
+    } catch {}
+}
+
 $needAddons = $All -or ($Url -and $Url.Count -gt 0)
 if ($needAddons) {
     Test-IvLyricsReady

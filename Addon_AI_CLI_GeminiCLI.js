@@ -281,7 +281,22 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                 while (true) {
                     const { done, value } = await reader.read();
-                    if (done) break;
+                    if (done) {
+                        // Flush remaining buffer (last line without trailing \n)
+                        if (buffer.startsWith('data: ')) {
+                            const payload = buffer.slice(6);
+                            if (payload !== '[DONE]') {
+                                try {
+                                    const parsed = JSON.parse(payload);
+                                    if (parsed.error) throw new Error(parsed.error);
+                                    if (parsed.chunk) accumulated += parsed.chunk;
+                                } catch (e) {
+                                    if (!(e instanceof SyntaxError)) throw e;
+                                }
+                            }
+                        }
+                        break;
+                    }
 
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split('\n');
@@ -296,7 +311,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             if (parsed.error) throw new Error(parsed.error);
                             if (parsed.chunk) accumulated += parsed.chunk;
                         } catch (e) {
-                            if (e.message && !e.message.includes('JSON')) throw e;
+                            if (!(e instanceof SyntaxError)) throw e;
                         }
                     }
                 }
@@ -466,7 +481,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             const health = await checkProxyHealth();
 
             if (!health.tools?.[TOOL_ID]?.available) {
-                throw new Error(`Gemini CLI is not available. Make sure it's installed.`);
+                const detail = health.tools?.[TOOL_ID]?.error
+                    ? ` (${health.tools[TOOL_ID].error})`
+                    : '';
+                throw new Error(`Gemini CLI is not available${detail}`);
             }
 
             await callProxy('Say "OK" if you receive this.');
