@@ -700,11 +700,15 @@ function initGeminiAuth() {
     // 토큰 갱신 시 파일에도 저장
     oauth2Client.on('tokens', (tokens) => {
         console.log('[gemini] Token refreshed automatically');
-        const updated = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-        if (tokens.access_token) updated.access_token = tokens.access_token;
-        if (tokens.refresh_token) updated.refresh_token = tokens.refresh_token;
-        if (tokens.expiry_date) updated.expiry_date = tokens.expiry_date;
-        fs.writeFileSync(credsPath, JSON.stringify(updated, null, 2));
+        try {
+            const updated = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+            if (tokens.access_token) updated.access_token = tokens.access_token;
+            if (tokens.refresh_token) updated.refresh_token = tokens.refresh_token;
+            if (tokens.expiry_date) updated.expiry_date = tokens.expiry_date;
+            fs.writeFileSync(credsPath, JSON.stringify(updated, null, 2));
+        } catch (e) {
+            console.error('[gemini] Failed to save refreshed token to file:', e.message);
+        }
     });
 
     return oauth2Client;
@@ -795,9 +799,11 @@ async function geminiGenerateContentInner(prompt, model) {
         const accessToken = await geminiAuth.getAccessToken();
         token = normalizeModelId(accessToken?.token || '');
     } catch (e) {
+        geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
         throw new Error(formatGeminiAuthError(e));
     }
     if (!token) {
+        geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
         throw new Error('Gemini OAuth access token is empty. Run `gemini` CLI again to re-authenticate.');
     }
 
