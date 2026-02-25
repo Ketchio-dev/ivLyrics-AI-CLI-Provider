@@ -196,18 +196,9 @@ async function checkForUpdates(force = false) {
     }
 }
 
-// CORS를 localhost 및 Spicetify 컨텍스트로 제한 (서버는 127.0.0.1에만 바인딩)
-const ALLOWED_ORIGINS = /^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$|sp:\/\/|file:\/\/)/;
-app.use(cors({
-    origin: (origin, callback) => {
-        console.log('[CORS] origin:', JSON.stringify(origin));
-        if (!origin || origin === 'null' || ALLOWED_ORIGINS.test(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('CORS: Origin not allowed'));
-        }
-    }
-}));
+// 서버는 127.0.0.1에만 바인딩되므로 외부 접근이 물리적으로 불가능
+// Spicetify 앱의 다양한 origin 형태를 모두 수용하기 위해 origin 제한 없음
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiter state for /generate endpoint
