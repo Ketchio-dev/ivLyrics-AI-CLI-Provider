@@ -1807,6 +1807,7 @@ app.post('/update', async (req, res) => {
     // 허용된 target만 수락 (path traversal 방지)
     const ALLOWED_TARGETS = new Set([
         'addons', 'proxy', 'all',
+        'Addon_AI_CLI_Provider.js',
         'Addon_AI_CLI_ClaudeCode.js',
         'Addon_AI_CLI_CodexCLI.js',
         'Addon_AI_CLI_GeminiCLI.js'
@@ -1846,9 +1847,7 @@ app.post('/update', async (req, res) => {
 
         const addonDir = getSpicetifyAddonDir();
         const addonFiles = [
-            'Addon_AI_CLI_ClaudeCode.js',
-            'Addon_AI_CLI_CodexCLI.js',
-            'Addon_AI_CLI_GeminiCLI.js'
+            'Addon_AI_CLI_Provider.js'
         ];
 
         if (target === 'addons' || target === 'all') {

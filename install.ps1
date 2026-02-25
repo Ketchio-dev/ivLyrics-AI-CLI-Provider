@@ -58,9 +58,7 @@ $AddonSources = Join-Path $IvLyricsData "addon_sources.json"
 $CliProxyDir = Join-Path $SpicetifyConfig "cli-proxy"
 
 $Addons = @(
-    "Addon_AI_CLI_ClaudeCode.js",
-    "Addon_AI_CLI_CodexCLI.js",
-    "Addon_AI_CLI_GeminiCLI.js"
+    "Addon_AI_CLI_Provider.js"
 )
 
 $ProxyFiles = @(

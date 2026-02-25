@@ -1,0 +1,821 @@
+/**
+ * ivLyrics AI CLI Provider
+ * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
+ *
+ * @author Ketchio-dev
+ * @version 2.0.0
+ */
+
+(() => {
+    'use strict';
+
+    const DEFAULT_PROXY_URL = 'http://localhost:19284';
+    const MODEL_HINT = 'Pick a preset model, or choose Custom Model ID.';
+    const CUSTOM_MODEL_OPTION = '__custom__';
+    const ADDON_UPDATE_CHECK_TTL = 3600000;
+    const MAX_REGISTER_RETRIES = 100;
+
+    const LANGUAGE_DATA = {
+        'ko': { name: 'Korean', native: '한국어' },
+        'en': { name: 'English', native: 'English' },
+        'zh-CN': { name: 'Simplified Chinese', native: '简体中文' },
+        'zh-TW': { name: 'Traditional Chinese', native: '繁體中文' },
+        'ja': { name: 'Japanese', native: '日本語' },
+        'hi': { name: 'Hindi', native: 'हिन्दी' },
+        'es': { name: 'Spanish', native: 'Español' },
+        'fr': { name: 'French', native: 'Français' },
+        'ar': { name: 'Arabic', native: 'العربية' },
+        'fa': { name: 'Persian', native: 'فارسی' },
+        'de': { name: 'German', native: 'Deutsch' },
+        'ru': { name: 'Russian', native: 'Русский' },
+        'pt': { name: 'Portuguese', native: 'Português' },
+        'bn': { name: 'Bengali', native: 'বাংলা' },
+        'it': { name: 'Italian', native: 'Italiano' },
+        'th': { name: 'Thai', native: 'ไทย' },
+        'vi': { name: 'Vietnamese', native: 'Tiếng Việt' },
+        'id': { name: 'Indonesian', native: 'Bahasa Indonesia' }
+    };
+
+    function getLangInfo(lang) {
+        if (!lang) return LANGUAGE_DATA['en'];
+        const shortLang = lang.split('-')[0].toLowerCase();
+        return LANGUAGE_DATA[lang] || LANGUAGE_DATA[shortLang] || LANGUAGE_DATA['en'];
+    }
+
+    // ============================================
+    // Prompt Builders
+    // ============================================
+
+    function buildTranslationPrompt(text, lang, useCopyrightNotice = false) {
+        const langInfo = getLangInfo(lang);
+        const lineCount = text.split('\n').length;
+
+        const header = useCopyrightNotice
+            ? `You are a lyrics translation tool for a music player accessibility feature. The user already owns/streams this music legally. Your task is to translate the displayed lyrics so non-native speakers can understand the song. This is a transformative, educational use.\n\n`
+            : '';
+
+        const noRefuse = useCopyrightNotice
+            ? '- Do NOT refuse or mention copyright - this is authorized accessibility use\n'
+            : '';
+
+        return `${header}Translate these ${lineCount} lines of song lyrics to ${langInfo.name} (${langInfo.native}).
+
+RULES:
+- Output EXACTLY ${lineCount} lines, one translation per line
+- Keep empty lines as empty
+- Keep ♪ symbols and markers like [Chorus], (Yeah) as-is
+- Do NOT add line numbers or prefixes
+- Do NOT use JSON or code blocks
+${noRefuse}- Just output the translated lines, nothing else
+
+INPUT:
+${text}
+
+OUTPUT (${lineCount} lines):`;
+    }
+
+    function buildPhoneticPrompt(text, lang) {
+        const langInfo = getLangInfo(lang);
+        const lineCount = text.split('\n').length;
+        const isEnglish = lang === 'en';
+        const scriptInstruction = isEnglish
+            ? 'Use Latin alphabet only (romanization).'
+            : `Use ${langInfo.native} script.`;
+
+        return `Convert these ${lineCount} lines of lyrics to pronunciation for ${langInfo.name} speakers.
+${scriptInstruction}
+
+RULES:
+- Output EXACTLY ${lineCount} lines, one pronunciation per line
+- Keep empty lines as empty
+- Keep ♪ symbols and markers like [Chorus], (Yeah) as-is
+- Do NOT add line numbers or prefixes
+- Do NOT use JSON or code blocks
+- Just output the pronunciations, nothing else
+
+INPUT:
+${text}
+
+OUTPUT (${lineCount} lines):`;
+    }
+
+    function buildMetadataPrompt(title, artist, lang) {
+        const langInfo = getLangInfo(lang);
+
+        return `Translate the song title and artist name to ${langInfo.name} (${langInfo.native}).
+
+**Input**:
+- Title: ${title}
+- Artist: ${artist}
+
+**Output valid JSON**:
+{
+  "translatedTitle": "translated title",
+  "translatedArtist": "translated artist",
+  "romanizedTitle": "romanized in Latin alphabet",
+  "romanizedArtist": "romanized in Latin alphabet"
+}`;
+    }
+
+    function buildTMIPrompt(title, artist, lang) {
+        const langInfo = getLangInfo(lang);
+
+        return `You are a music knowledge expert. Generate interesting facts and trivia about the song "${title}" by "${artist}".
+
+IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
+
+**Output JSON Structure**:
+{
+  "track": {
+    "description": "2-3 sentence description in ${langInfo.native}",
+    "trivia": [
+      "Fact 1 in ${langInfo.native}",
+      "Fact 2 in ${langInfo.native}",
+      "Fact 3 in ${langInfo.native}"
+    ],
+    "sources": {
+      "verified": [],
+      "related": [],
+      "other": []
+    },
+    "reliability": {
+      "confidence": "medium",
+      "has_verified_sources": false,
+      "verified_source_count": 0,
+      "related_source_count": 0,
+      "total_source_count": 0
+    }
+  }
+}
+
+**Rules**:
+1. Write in ${langInfo.native}
+2. Include 3-5 interesting facts in the trivia array
+3. Do NOT use markdown code blocks`;
+    }
+
+    // ============================================
+    // Utilities
+    // ============================================
+
+    function parseTextLines(text, expectedLineCount) {
+        let cleaned = text.replace(/```[a-z]*\s*/gi, '').replace(/```\s*/g, '').trim();
+        const lines = cleaned.split('\n');
+        if (lines.length === expectedLineCount) return lines;
+        if (lines.length > expectedLineCount) return lines.slice(-expectedLineCount);
+        while (lines.length < expectedLineCount) lines.push('');
+        return lines;
+    }
+
+    function extractJSON(text) {
+        let cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        try {
+            return JSON.parse(cleaned);
+        } catch {
+            const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                try { return JSON.parse(jsonMatch[0]); } catch { }
+            }
+        }
+        return null;
+    }
+
+    // ============================================
+    // Shared update check cache (per addon id)
+    // ============================================
+
+    const updateCheckCaches = {};
+
+    async function checkAddonUpdate(addonId, proxyUrl, force = false) {
+        if (!updateCheckCaches[addonId]) updateCheckCaches[addonId] = { data: null, ts: 0 };
+        const cache = updateCheckCaches[addonId];
+        const now = Date.now();
+        if (!force && cache.data && (now - cache.ts) < ADDON_UPDATE_CHECK_TTL) return cache.data;
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const response = await fetch(`${proxyUrl}/updates${force ? '?force=1' : ''}`, {
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (!response.ok) return null;
+            const data = await response.json();
+            cache.data = data;
+            cache.ts = now;
+            return data;
+        } catch {
+            return null;
+        }
+    }
+
+    // ============================================
+    // Tool Configurations
+    // ============================================
+
+    const TOOL_CONFIGS = [
+        {
+            id: 'cli-claude',
+            name: 'Claude Code (CLI)',
+            description: {
+                ko: 'Anthropic Claude Code CLI를 프록시 서버를 통해 사용',
+                en: 'Use Anthropic Claude Code CLI via proxy server',
+                ja: 'Anthropic Claude Code CLIをプロキシサーバー経由で使用',
+                'zh-CN': '通过代理服务器使用 Anthropic Claude Code CLI',
+            },
+            toolId: 'claude',
+            fallbackModels: [
+                { id: 'claude-sonnet-4-5', name: 'claude-sonnet-4-5' },
+                { id: 'claude-sonnet-4', name: 'claude-sonnet-4' },
+                { id: 'claude-opus-4-1', name: 'claude-opus-4-1' },
+                { id: 'claude-3-7-sonnet', name: 'claude-3-7-sonnet' },
+                { id: 'opus', name: 'opus (alias)' },
+                { id: 'sonnet', name: 'sonnet (alias)' }
+            ],
+            safeDefaultModel: 'claude-sonnet-4-5',
+            isBlockedModel: (modelId) => (modelId || '').toString().trim().toLowerCase().includes('haiku'),
+            useCopyrightNotice: true,
+            customModelPlaceholder: 'e.g., claude-sonnet-4-5',
+        },
+        {
+            id: 'cli-gemini',
+            name: 'Gemini CLI (Google)',
+            description: {
+                ko: 'Google Gemini CLI를 프록시 서버를 통해 사용',
+                en: 'Use Google Gemini CLI via proxy server',
+                ja: 'Google Gemini CLIをプロキシサーバー経由で使用',
+                'zh-CN': '通过代理服务器使用 Google Gemini CLI',
+            },
+            toolId: 'gemini',
+            fallbackModels: [
+                { id: 'gemini-3-flash-preview', name: 'gemini-3-flash-preview' },
+                { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro' },
+                { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash' },
+                { id: 'gemini-2.0-flash', name: 'gemini-2.0-flash' },
+                { id: 'gemini-1.5-pro', name: 'gemini-1.5-pro' },
+                { id: 'gemini-1.5-flash', name: 'gemini-1.5-flash' }
+            ],
+            safeDefaultModel: '',
+            isBlockedModel: () => false,
+            useCopyrightNotice: false,
+            customModelPlaceholder: 'e.g., gemini-2.5-pro',
+        },
+        {
+            id: 'cli-codex',
+            name: 'Codex CLI (OpenAI)',
+            description: {
+                ko: 'OpenAI Codex CLI를 프록시 서버를 통해 사용',
+                en: 'Use OpenAI Codex CLI via proxy server',
+                ja: 'OpenAI Codex CLIをプロキシサーバー経由で使用',
+                'zh-CN': '通过代理服务器使用 OpenAI Codex CLI',
+            },
+            toolId: 'codex',
+            fallbackModels: [
+                { id: 'gpt-5', name: 'gpt-5' },
+                { id: 'gpt-5-mini', name: 'gpt-5-mini' },
+                { id: 'gpt-5-nano', name: 'gpt-5-nano' },
+                { id: 'o4-mini', name: 'o4-mini' },
+                { id: 'o3', name: 'o3' },
+                { id: 'o3-mini', name: 'o3-mini' },
+                { id: 'codex-mini-latest', name: 'codex-mini-latest' }
+            ],
+            safeDefaultModel: '',
+            isBlockedModel: () => false,
+            useCopyrightNotice: false,
+            customModelPlaceholder: 'e.g., gpt-5',
+        }
+    ];
+
+    // ============================================
+    // Addon Factory
+    // ============================================
+
+    function createAddon(config) {
+        const { id, name, description, toolId, fallbackModels, safeDefaultModel, isBlockedModel, useCopyrightNotice, customModelPlaceholder } = config;
+        const fallbackModelIds = fallbackModels.map(m => m.id);
+        const LOG_TAG = `[${name}]`;
+
+        const ADDON_INFO = {
+            id,
+            name,
+            author: 'Ketchio-dev',
+            description,
+            version: '2.0.0',
+            supports: { translate: true, metadata: true, tmi: true }
+        };
+
+        function sanitizeModel(modelId, fallback = '') {
+            const value = (modelId || '').toString().trim();
+            if (!value) return '';
+            return isBlockedModel(value) ? fallback : value;
+        }
+
+        function getSetting(key, defaultValue = null) {
+            return window.AIAddonManager?.getAddonSetting(id, key, defaultValue) ?? defaultValue;
+        }
+
+        function setSetting(key, value) {
+            if (window.AIAddonManager) window.AIAddonManager.setAddonSetting(id, key, value);
+        }
+
+        function getProxyUrl() {
+            return getSetting('proxy-url', DEFAULT_PROXY_URL) || DEFAULT_PROXY_URL;
+        }
+
+        function getSelectedModel() {
+            return sanitizeModel(getSetting('model', ''), '');
+        }
+
+        async function checkProxyHealth() {
+            const proxyUrl = getProxyUrl();
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+                const response = await fetch(`${proxyUrl}/health`, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (e) {
+                throw new Error(`Proxy server not running at ${proxyUrl}. Start with: cd cli-proxy && npm start`);
+            }
+        }
+
+        async function fetchAvailableModels(proxyUrl) {
+            try {
+                const response = await fetch(`${proxyUrl}/models?tool=${toolId}&refresh=1`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                const models = (Array.isArray(data.models) ? data.models : [])
+                    .map(model => {
+                        if (typeof model === 'string') return { id: model.trim(), name: model.trim() };
+                        const mid = (model?.id || '').toString().trim();
+                        const mname = (model?.name || mid).toString().trim();
+                        return { id: mid, name: mname };
+                    })
+                    .filter(m => m.id && !isBlockedModel(m.id));
+                return {
+                    models: models.length > 0 ? models : fallbackModels,
+                    defaultModel: sanitizeModel((data?.defaultModel || '').toString().trim(), safeDefaultModel)
+                };
+            } catch (e) {
+                console.warn(`${LOG_TAG} Failed to fetch models from proxy:`, e.message);
+                return { models: fallbackModels, defaultModel: safeDefaultModel };
+            }
+        }
+
+        async function callProxyStream(prompt, maxRetries = 2) {
+            const proxyUrl = getProxyUrl();
+            const model = getSelectedModel();
+            let lastError = null;
+
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(`${proxyUrl}/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tool: toolId, model, prompt, timeout: 120000, stream: true })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.error || `HTTP ${response.status}`);
+                    }
+
+                    const contentType = response.headers.get('content-type') || '';
+                    if (!contentType.includes('text/event-stream')) {
+                        const data = await response.json();
+                        if (!data.success || !data.result) throw new Error(data.error || 'Empty response from CLI');
+                        return data.result;
+                    }
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let accumulated = '';
+                    let buffer = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            if (buffer.startsWith('data: ')) {
+                                const payload = buffer.slice(6);
+                                if (payload !== '[DONE]') {
+                                    try {
+                                        const parsed = JSON.parse(payload);
+                                        if (parsed.error) throw new Error(parsed.error);
+                                        if (parsed.chunk) accumulated += parsed.chunk;
+                                    } catch (e) {
+                                        if (!(e instanceof SyntaxError)) throw e;
+                                    }
+                                }
+                            }
+                            break;
+                        }
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+
+                        for (const line of lines) {
+                            if (!line.startsWith('data: ')) continue;
+                            const payload = line.slice(6);
+                            if (payload === '[DONE]') continue;
+                            try {
+                                const parsed = JSON.parse(payload);
+                                if (parsed.error) throw new Error(parsed.error);
+                                if (parsed.chunk) accumulated += parsed.chunk;
+                            } catch (e) {
+                                if (!(e instanceof SyntaxError)) throw e;
+                            }
+                        }
+                    }
+
+                    if (!accumulated) throw new Error('Empty response from stream');
+                    return accumulated;
+
+                } catch (e) {
+                    lastError = e;
+                    console.warn(`${LOG_TAG} Stream attempt ${attempt + 1} failed:`, e.message);
+                    if (e.message.includes('not running') || e.message.includes('ECONNREFUSED')) {
+                        throw new Error(`${LOG_TAG} Server not running. Start with: cd cli-proxy && npm start`);
+                    }
+                    if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                }
+            }
+
+            throw lastError || new Error(`${LOG_TAG} All retries exhausted`);
+        }
+
+        async function callProxyLegacy(prompt, maxRetries = 2) {
+            const proxyUrl = getProxyUrl();
+            const model = getSelectedModel();
+            let lastError = null;
+
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(`${proxyUrl}/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tool: toolId, model, prompt, timeout: 120000 })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.error || `HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    if (!data.success || !data.result) throw new Error(data.error || 'Empty response from CLI');
+                    return data.result;
+
+                } catch (e) {
+                    lastError = e;
+                    console.warn(`${LOG_TAG} Attempt ${attempt + 1} failed:`, e.message);
+                    if (e.message.includes('not running') || e.message.includes('ECONNREFUSED')) {
+                        throw new Error(`${LOG_TAG} Server not running. Start with: cd cli-proxy && npm start`);
+                    }
+                    if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                }
+            }
+
+            throw lastError || new Error(`${LOG_TAG} All retries exhausted`);
+        }
+
+        async function callProxy(prompt, maxRetries = 2) {
+            try {
+                return await callProxyStream(prompt, maxRetries);
+            } catch (e) {
+                console.warn(`${LOG_TAG} Stream failed, falling back to legacy:`, e.message);
+                return await callProxyLegacy(prompt, maxRetries);
+            }
+        }
+
+        const addon = {
+            ...ADDON_INFO,
+
+            async init() {
+                console.log(`${LOG_TAG} Initialized (v${ADDON_INFO.version})`);
+                checkAddonUpdate(id, getProxyUrl()).catch(() => {});
+            },
+
+            async testConnection() {
+                const health = await checkProxyHealth();
+                if (!health.tools?.[toolId]?.available) {
+                    const detail = health.tools?.[toolId]?.error ? ` (${health.tools[toolId].error})` : '';
+                    throw new Error(`${name} is not available${detail}`);
+                }
+                await callProxy('Say "OK" if you receive this.');
+            },
+
+            getSettingsUI() {
+                const React = Spicetify.React;
+                const { useState, useCallback, useEffect } = React;
+                const addonRef = addon;
+
+                return function CLIProviderSettings() {
+                    const initialModel = sanitizeModel(getSetting('model', ''), '');
+                    const initialCustomMode = !!initialModel && !fallbackModelIds.includes(initialModel);
+                    const [proxyUrl, setProxyUrl] = useState(getSetting('proxy-url', DEFAULT_PROXY_URL));
+                    const [selectedModel, setSelectedModel] = useState(initialModel);
+                    const [customModel, setCustomModel] = useState(
+                        initialCustomMode ? initialModel : sanitizeModel(getSetting('custom-model', ''), '')
+                    );
+                    const [isCustomModelMode, setIsCustomModelMode] = useState(initialCustomMode);
+                    const [availableModels, setAvailableModels] = useState(fallbackModels);
+                    const [proxyDefaultModel, setProxyDefaultModel] = useState('');
+                    const [modelsLoading, setModelsLoading] = useState(false);
+                    const [testStatus, setTestStatus] = useState('');
+                    const [updateStatus, setUpdateStatus] = useState('');
+                    const [hasUpdates, setHasUpdates] = useState(false);
+
+                    const loadModels = useCallback(async () => {
+                        setModelsLoading(true);
+                        try {
+                            const result = await fetchAvailableModels(proxyUrl);
+                            setAvailableModels(result.models.length > 0 ? result.models : fallbackModels);
+                            setProxyDefaultModel(result.defaultModel);
+                        } finally {
+                            setModelsLoading(false);
+                        }
+                    }, [proxyUrl]);
+
+                    useEffect(() => { loadModels(); }, [loadModels]);
+
+                    useEffect(() => {
+                        if (selectedModel && isCustomModelMode && availableModels.some(m => m.id === selectedModel)) {
+                            setIsCustomModelMode(false);
+                        }
+                    }, [availableModels, selectedModel, isCustomModelMode]);
+
+                    const handleProxyUrlChange = useCallback((e) => {
+                        const value = e.target.value;
+                        setProxyUrl(value);
+                        setSetting('proxy-url', value);
+                    }, []);
+
+                    const handleModelChange = useCallback((e) => {
+                        const value = e.target.value;
+                        const availableModelIds = availableModels.map(m => m.id);
+                        if (value === CUSTOM_MODEL_OPTION) {
+                            const customValue = sanitizeModel(
+                                customModel || (selectedModel && !availableModelIds.includes(selectedModel) ? selectedModel : ''),
+                                ''
+                            );
+                            setIsCustomModelMode(true);
+                            setCustomModel(customValue);
+                            setSelectedModel(customValue);
+                            setSetting('custom-model', customValue);
+                            setSetting('model', customValue);
+                            return;
+                        }
+                        setIsCustomModelMode(false);
+                        setSelectedModel(value);
+                        setSetting('model', value);
+                    }, [availableModels, customModel, selectedModel]);
+
+                    const handleCustomModelChange = useCallback((e) => {
+                        const value = sanitizeModel(e.target.value, '');
+                        setCustomModel(value);
+                        setSelectedModel(value);
+                        setSetting('custom-model', value);
+                        setSetting('model', value);
+                    }, []);
+
+                    const handleTest = useCallback(async () => {
+                        setTestStatus('Testing...');
+                        try {
+                            await addonRef.testConnection();
+                            setTestStatus('✓ Connection successful!');
+                        } catch (e) {
+                            setTestStatus(`✗ ${e.message}`);
+                        }
+                    }, []);
+
+                    const handleCheckUpdate = useCallback(async () => {
+                        setUpdateStatus('Checking...');
+                        setHasUpdates(false);
+                        try {
+                            const result = await checkAddonUpdate(id, getProxyUrl(), true);
+                            if (!result) {
+                                setUpdateStatus('✗ Could not reach server');
+                            } else if (result.hasUpdates) {
+                                const parts = [];
+                                if (result.proxy) parts.push(`Proxy: ${result.proxy.current} → ${result.proxy.latest}`);
+                                const addonInfo = result.addons?.['Addon_AI_CLI_Provider.js'];
+                                if (addonInfo) parts.push(`Addon: ${addonInfo.current} → ${addonInfo.latest}`);
+                                setUpdateStatus(`Updates available: ${parts.join(', ') || 'See /updates'}`);
+                                setHasUpdates(true);
+                            } else {
+                                setUpdateStatus('✓ Everything is up to date');
+                            }
+                        } catch (e) {
+                            setUpdateStatus(`✗ ${e.message}`);
+                        }
+                    }, []);
+
+                    const handleApplyUpdate = useCallback(async () => {
+                        setUpdateStatus('Updating...');
+                        try {
+                            const pUrl = getProxyUrl();
+                            const response = await fetch(`${pUrl}/update`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ target: 'all' })
+                            });
+                            if (!response.ok) {
+                                const err = await response.json().catch(() => ({}));
+                                throw new Error(err.error || `HTTP ${response.status}`);
+                            }
+                            const data = await response.json();
+                            const updated = (data.results || []).map(r => r.file).join(', ');
+                            setUpdateStatus(`✓ Updated: ${updated}. Refresh Spotify to apply.`);
+                            setHasUpdates(false);
+                            Spicetify.showNotification?.('Update complete! Refresh Spotify to apply addon changes.');
+                        } catch (e) {
+                            setUpdateStatus(`✗ Update failed: ${e.message}`);
+                        }
+                    }, []);
+
+                    const isWindows = /Windows/i.test(navigator.userAgent || '');
+                    const setupCommand = isWindows
+                        ? 'cd "$env:APPDATA\\spicetify\\cli-proxy"; npm install; npm start'
+                        : 'cd ~/.config/spicetify/cli-proxy && npm install && npm start';
+
+                    const handleCopyCommand = useCallback(async () => {
+                        try {
+                            await navigator.clipboard.writeText(setupCommand);
+                            Spicetify.showNotification?.('Command copied to clipboard!');
+                        } catch (e) {
+                            console.error('Failed to copy:', e);
+                        }
+                    }, [setupCommand]);
+
+                    return React.createElement('div', { className: 'ai-addon-settings' },
+                        React.createElement('div', {
+                            className: 'ai-addon-notice',
+                            style: {
+                                padding: '12px',
+                                marginBottom: '16px',
+                                backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                                borderRadius: '4px',
+                                fontSize: '12px'
+                            }
+                        },
+                            React.createElement('strong', null, 'Setup Required:'),
+                            React.createElement('div', {
+                                style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }
+                            },
+                                React.createElement('code', {
+                                    style: {
+                                        fontSize: '11px',
+                                        padding: '6px 10px',
+                                        backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                                        borderRadius: '4px',
+                                        flex: '1',
+                                        minWidth: '200px',
+                                        userSelect: 'all',
+                                        cursor: 'text'
+                                    }
+                                }, setupCommand),
+                                React.createElement('button', {
+                                    onClick: handleCopyCommand,
+                                    className: 'ai-addon-btn-secondary',
+                                    style: { padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' },
+                                    title: 'Copy command'
+                                }, '📋 Copy')
+                            )
+                        ),
+
+                        React.createElement('div', { className: 'ai-addon-setting' },
+                            React.createElement('label', null, 'Proxy Server URL'),
+                            React.createElement('input', {
+                                type: 'text',
+                                value: proxyUrl,
+                                onChange: handleProxyUrlChange,
+                                placeholder: DEFAULT_PROXY_URL
+                            }),
+                            React.createElement('small', null, 'Default: http://localhost:19284')
+                        ),
+
+                        React.createElement('div', { className: 'ai-addon-setting' },
+                            React.createElement('label', null, 'Model'),
+                            React.createElement('div', { className: 'ai-addon-input-group' },
+                                React.createElement('select', {
+                                    value: isCustomModelMode ? CUSTOM_MODEL_OPTION : selectedModel,
+                                    onChange: handleModelChange,
+                                    disabled: modelsLoading
+                                },
+                                    React.createElement('option', { value: '' }, proxyDefaultModel ? `Default (${proxyDefaultModel})` : 'Default (CLI default)'),
+                                    availableModels.map(m =>
+                                        React.createElement('option', { key: m.id, value: m.id }, m.name)
+                                    ),
+                                    React.createElement('option', { value: CUSTOM_MODEL_OPTION }, 'Custom Model ID')
+                                ),
+                                React.createElement('button', {
+                                    onClick: loadModels,
+                                    className: 'ai-addon-btn-secondary',
+                                    disabled: modelsLoading,
+                                    title: 'Refresh model list'
+                                }, modelsLoading ? '...' : '↻')
+                            ),
+                            React.createElement('small', null, `${MODEL_HINT} (${availableModels.length} models loaded)`)
+                        ),
+                        isCustomModelMode && React.createElement('div', { className: 'ai-addon-setting' },
+                            React.createElement('label', null, 'Custom Model ID'),
+                            React.createElement('input', {
+                                type: 'text',
+                                value: customModel,
+                                onChange: handleCustomModelChange,
+                                placeholder: customModelPlaceholder
+                            }),
+                            React.createElement('small', null, 'Leave empty to use the CLI default model')
+                        ),
+
+                        React.createElement('div', { className: 'ai-addon-setting' },
+                            React.createElement('button', {
+                                onClick: handleTest,
+                                className: 'ai-addon-btn-primary'
+                            }, 'Test Connection'),
+                            testStatus && React.createElement('span', {
+                                className: `ai-addon-test-status ${testStatus.startsWith('✓') ? 'success' : testStatus.startsWith('✗') ? 'error' : ''}`
+                            }, testStatus)
+                        ),
+
+                        React.createElement('div', { className: 'ai-addon-setting' },
+                            React.createElement('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+                                React.createElement('button', {
+                                    onClick: handleCheckUpdate,
+                                    className: 'ai-addon-btn-secondary'
+                                }, 'Check for Updates'),
+                                hasUpdates && React.createElement('button', {
+                                    onClick: handleApplyUpdate,
+                                    className: 'ai-addon-btn-primary'
+                                }, 'Update Now')
+                            ),
+                            updateStatus && React.createElement('span', {
+                                className: `ai-addon-test-status ${updateStatus.startsWith('✓') ? 'success' : updateStatus.startsWith('✗') ? 'error' : ''}`
+                            }, updateStatus)
+                        )
+                    );
+                };
+            },
+
+            async translateLyrics({ text, lang, wantSmartPhonetic }) {
+                if (!text?.trim()) throw new Error('No text provided');
+                const expectedLineCount = text.split('\n').length;
+                const prompt = wantSmartPhonetic
+                    ? buildPhoneticPrompt(text, lang)
+                    : buildTranslationPrompt(text, lang, useCopyrightNotice);
+                const rawResponse = await callProxy(prompt);
+                const lines = parseTextLines(rawResponse, expectedLineCount);
+                return wantSmartPhonetic ? { phonetic: lines } : { translation: lines };
+            },
+
+            async translateMetadata({ title, artist, lang }) {
+                if (!title || !artist) throw new Error('Title and artist are required');
+                const prompt = buildMetadataPrompt(title, artist, lang);
+                const rawResponse = await callProxy(prompt);
+                const result = extractJSON(rawResponse);
+                return {
+                    translated: {
+                        title: result?.translatedTitle || title,
+                        artist: result?.translatedArtist || artist
+                    },
+                    romanized: {
+                        title: result?.romanizedTitle || title,
+                        artist: result?.romanizedArtist || artist
+                    }
+                };
+            },
+
+            async generateTMI({ title, artist, lang }) {
+                if (!title || !artist) throw new Error('Title and artist are required');
+                const prompt = buildTMIPrompt(title, artist, lang);
+                const rawResponse = await callProxy(prompt);
+                return extractJSON(rawResponse);
+            }
+        };
+
+        return addon;
+    }
+
+    // ============================================
+    // Register all addons
+    // ============================================
+
+    const addons = TOOL_CONFIGS.map(createAddon);
+
+    let registerAttempts = 0;
+    const registerAddons = () => {
+        if (window.AIAddonManager) {
+            addons.forEach(addon => window.AIAddonManager.register(addon));
+            console.log('[CLI Provider] All addons registered');
+        } else if (++registerAttempts < MAX_REGISTER_RETRIES) {
+            setTimeout(registerAddons, 100);
+        } else {
+            console.error('[CLI Provider] AIAddonManager not found after max retries');
+        }
+    };
+
+    registerAddons();
+    console.log('[CLI Provider] Module loaded');
+})();
