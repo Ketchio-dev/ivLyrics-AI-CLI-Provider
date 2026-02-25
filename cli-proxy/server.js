@@ -200,6 +200,7 @@ async function checkForUpdates(force = false) {
 const ALLOWED_ORIGINS = /^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$|sp:\/\/|file:\/\/)/;
 app.use(cors({
     origin: (origin, callback) => {
+        console.log('[CORS] origin:', JSON.stringify(origin));
         if (!origin || origin === 'null' || ALLOWED_ORIGINS.test(origin)) {
             callback(null, true);
         } else {
