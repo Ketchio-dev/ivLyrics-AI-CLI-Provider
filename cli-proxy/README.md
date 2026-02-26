@@ -20,9 +20,14 @@ npm install
 Windows PowerShell:
 
 ```powershell
-$proxyDir = "$env:APPDATA\spicetify\cli-proxy"
-if (!(Test-Path $proxyDir)) { $proxyDir = "$env:USERPROFILE\.config\spicetify\cli-proxy" }
-Set-Location $proxyDir
+$cfg = $null
+if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg = (spicetify -c 2>$null | Select-Object -First 1) }
+$dirs = @()
+if ($cfg) { $dirs += (Split-Path $cfg -Parent) }
+$dirs += "$env:APPDATA\spicetify", "$env:USERPROFILE\.config\spicetify", "$env:USERPROFILE\.spicetify"
+$base = $dirs | Where-Object { $_ -and (Test-Path (Join-Path $_ "cli-proxy")) } | Select-Object -First 1
+if (!$base) { Write-Host "cli-proxy not found. Run install.ps1 -Proxy first." -ForegroundColor Yellow; exit 1 }
+Set-Location (Join-Path $base "cli-proxy")
 npm.cmd install
 ```
 
@@ -35,6 +40,16 @@ npm start
 Windows PowerShell:
 
 ```powershell
+if (!$base) {
+  $cfg = $null
+  if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg = (spicetify -c 2>$null | Select-Object -First 1) }
+  $dirs = @()
+  if ($cfg) { $dirs += (Split-Path $cfg -Parent) }
+  $dirs += "$env:APPDATA\spicetify", "$env:USERPROFILE\.config\spicetify", "$env:USERPROFILE\.spicetify"
+  $base = $dirs | Where-Object { $_ -and (Test-Path (Join-Path $_ "cli-proxy")) } | Select-Object -First 1
+  if (!$base) { Write-Host "cli-proxy not found. Run install.ps1 -Proxy first." -ForegroundColor Yellow; exit 1 }
+}
+Set-Location (Join-Path $base "cli-proxy")
 npm.cmd start
 ```
 

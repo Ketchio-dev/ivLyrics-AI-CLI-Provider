@@ -19,7 +19,46 @@ if ($Full) {
     $Proxy = $true
 }
 
-$SpicetifyConfig = Join-Path $env:APPDATA "spicetify"
+function Resolve-SpicetifyConfig {
+    $candidates = @()
+
+    try {
+        $spicetify = Get-Command spicetify -ErrorAction SilentlyContinue
+        if ($null -ne $spicetify) {
+            $configFile = (& $spicetify.Source -c 2>$null | Select-Object -First 1)
+            if (-not [string]::IsNullOrWhiteSpace($configFile)) {
+                $fromCmd = Split-Path -Parent $configFile.Trim()
+                if (-not [string]::IsNullOrWhiteSpace($fromCmd)) {
+                    $candidates += $fromCmd
+                }
+            }
+        }
+    } catch {}
+
+    $candidates += @(
+        (Join-Path $env:APPDATA "spicetify"),
+        (Join-Path $env:USERPROFILE ".config\spicetify"),
+        (Join-Path $env:USERPROFILE ".spicetify")
+    )
+
+    $unique = @()
+    foreach ($path in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($path) -and -not ($unique -contains $path)) {
+            $unique += $path
+        }
+    }
+
+    foreach ($path in $unique) {
+        if (Test-Path -LiteralPath $path) {
+            return $path
+        }
+    }
+
+    return (Join-Path $env:APPDATA "spicetify")
+}
+
+$SpicetifyConfig = Resolve-SpicetifyConfig
+Write-Info "Using Spicetify config: $SpicetifyConfig"
 $IvLyricsApp = Join-Path $SpicetifyConfig "CustomApps\ivLyrics"
 $IvLyricsData = Join-Path $SpicetifyConfig "ivLyrics"
 $Manifest = Join-Path $IvLyricsApp "manifest.json"

@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.1
+ * @version 2.0.2
  */
 
 (() => {
@@ -362,7 +362,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.1',
+            version: '2.0.2',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -757,7 +757,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                     const isWindows = /Windows/i.test(navigator.userAgent || '');
                     const setupCommand = isWindows
-                        ? '$proxyDir="$env:APPDATA\\spicetify\\cli-proxy"; if (!(Test-Path $proxyDir)) { $proxyDir="$env:USERPROFILE\\.config\\spicetify\\cli-proxy" }; if (!(Test-Path $proxyDir)) { Write-Host "cli-proxy not found. Run install.ps1 -Proxy first." -ForegroundColor Yellow; exit 1 }; Set-Location $proxyDir; npm.cmd install; npm.cmd start'
+                        ? '$cfg=$null; if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg=(spicetify -c 2>$null | Select-Object -First 1) }; $dirs=@(); if ($cfg) { $dirs += (Split-Path $cfg -Parent) }; $dirs += "$env:APPDATA\\spicetify","$env:USERPROFILE\\.config\\spicetify","$env:USERPROFILE\\.spicetify"; $base=($dirs | Where-Object { $_ -and (Test-Path (Join-Path $_ "cli-proxy")) } | Select-Object -First 1); if (!$base) { Write-Host "cli-proxy not found. Run install.ps1 -Proxy first." -ForegroundColor Yellow; exit 1 }; Set-Location (Join-Path $base "cli-proxy"); npm.cmd install; npm.cmd start'
                         : 'cd ~/.config/spicetify/cli-proxy && npm install && npm start';
 
                     const handleCopyCommand = useCallback(async () => {

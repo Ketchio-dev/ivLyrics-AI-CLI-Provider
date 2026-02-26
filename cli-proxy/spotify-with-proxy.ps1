@@ -15,14 +15,47 @@ $ErrorActionPreference = 'Stop'
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-$SpicetifyAppData   = Join-Path $env:APPDATA 'spicetify'
-$SpicetifyUserConfig = Join-Path $env:USERPROFILE '.config\spicetify'
+function Get-SpicetifyConfigCandidates {
+    $candidates = @()
 
-if (Test-Path (Join-Path $SpicetifyAppData 'cli-proxy\server.js')) {
-    $CliProxyDir = Join-Path $SpicetifyAppData 'cli-proxy'
-} elseif (Test-Path (Join-Path $SpicetifyUserConfig 'cli-proxy\server.js')) {
-    $CliProxyDir = Join-Path $SpicetifyUserConfig 'cli-proxy'
-} else {
+    try {
+        $spicetify = Get-Command spicetify -ErrorAction SilentlyContinue
+        if ($null -ne $spicetify) {
+            $configFile = (& $spicetify.Source -c 2>$null | Select-Object -First 1)
+            if (-not [string]::IsNullOrWhiteSpace($configFile)) {
+                $fromCmd = Split-Path -Parent $configFile.Trim()
+                if (-not [string]::IsNullOrWhiteSpace($fromCmd)) {
+                    $candidates += $fromCmd
+                }
+            }
+        }
+    } catch {}
+
+    $candidates += @(
+        (Join-Path $env:APPDATA 'spicetify'),
+        (Join-Path $env:USERPROFILE '.config\spicetify'),
+        (Join-Path $env:USERPROFILE '.spicetify')
+    )
+
+    $unique = @()
+    foreach ($path in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($path) -and -not ($unique -contains $path)) {
+            $unique += $path
+        }
+    }
+    return $unique
+}
+
+$CliProxyDir = $null
+foreach ($configPath in (Get-SpicetifyConfigCandidates)) {
+    $candidate = Join-Path $configPath 'cli-proxy'
+    if (Test-Path (Join-Path $candidate 'server.js')) {
+        $CliProxyDir = $candidate
+        break
+    }
+}
+
+if ($null -eq $CliProxyDir) {
     Write-Host "[ERROR] server.js not found. Install the proxy server first." -ForegroundColor Red
     exit 1
 }
