@@ -231,6 +231,7 @@ const CLAUDE_SAFE_DEFAULT_MODEL = 'claude-sonnet-4-5';
 let geminiAuth = null;          // OAuth2Client 캐시
 let geminiProjectId = null;     // Code Assist 프로젝트 ID 캐시
 let geminiProjectIdTs = 0;      // 프로젝트 ID 캐시 타임스탬프
+let geminiAuthSource = 'unknown'; // 현재 OAuth client source
 
 function hasGeminiOAuthClientConfig(clientId, clientSecret) {
     const id = normalizeModelId(clientId);
@@ -570,38 +571,64 @@ function readGeminiCredsFile() {
     }
 }
 
-function resolveGeminiOAuthClient(creds) {
+function resolveGeminiOAuthClient(creds, options = {}) {
+    const preferCliDefaults = options.preferCliDefaults === true;
     const credsClientId = normalizeModelId(creds?.client_id || creds?.clientId || '');
     const credsClientSecret = normalizeModelId(creds?.client_secret || creds?.clientSecret || '');
-    if (hasGeminiOAuthClientConfig(credsClientId, credsClientSecret)) {
-        return {
+    const credsConfig = hasGeminiOAuthClientConfig(credsClientId, credsClientSecret)
+        ? {
             clientId: credsClientId,
             clientSecret: credsClientSecret,
             source: 'oauth_creds'
-        };
-    }
+        }
+        : null;
 
     const defaults = resolveGeminiCliOAuthDefaults();
-    if (hasGeminiOAuthClientConfig(defaults.clientId, defaults.clientSecret)) {
-        return {
+    const defaultsConfig = hasGeminiOAuthClientConfig(defaults.clientId, defaults.clientSecret)
+        ? {
             clientId: defaults.clientId,
             clientSecret: defaults.clientSecret,
             source: defaults.source ? `gemini-cli:${defaults.source}` : 'gemini-cli',
-        };
+        }
+        : null;
+
+    if (preferCliDefaults) {
+        if (defaultsConfig) return defaultsConfig;
+        if (credsConfig) return credsConfig;
+    } else {
+        if (credsConfig) return credsConfig;
+        if (defaultsConfig) return defaultsConfig;
     }
 
     return { clientId: '', clientSecret: '', source: 'missing' };
 }
 
-function formatGeminiAuthError(error) {
+function getGeminiAuthErrorInfo(error) {
     const message = String(error?.message || '').trim();
     const oauthData = error?.response?.data;
-    const oauthCode = normalizeModelId(
-        typeof oauthData?.error === 'string' ? oauthData.error : message
-    );
+
+    let oauthCode = normalizeModelId(typeof oauthData?.error === 'string' ? oauthData.error : '');
     const oauthDescription = normalizeModelId(
         typeof oauthData?.error_description === 'string' ? oauthData.error_description : ''
     );
+
+    if (!oauthCode) {
+        const lowered = message.toLowerCase();
+        if (lowered.includes('invalid_client')) oauthCode = 'invalid_client';
+        else if (lowered.includes('invalid_grant')) oauthCode = 'invalid_grant';
+        else if (lowered.includes('invalid_request')) oauthCode = 'invalid_request';
+    }
+
+    return { message, oauthCode, oauthDescription };
+}
+
+function isGeminiInvalidClientError(error) {
+    const { message, oauthCode } = getGeminiAuthErrorInfo(error);
+    return oauthCode === 'invalid_client' || message.toLowerCase().includes('invalid_client');
+}
+
+function formatGeminiAuthError(error) {
+    const { message, oauthCode, oauthDescription } = getGeminiAuthErrorInfo(error);
 
     if (oauthCode === 'invalid_request') {
         return (
@@ -613,6 +640,13 @@ function formatGeminiAuthError(error) {
         return (
             'Gemini OAuth token refresh failed (invalid_grant). ' +
             'Run `gemini` CLI again to re-authenticate.'
+        );
+    }
+    if (oauthCode === 'invalid_client') {
+        return (
+            'Gemini OAuth client credentials are invalid (invalid_client). ' +
+            'Run `gemini` CLI again to re-authenticate. ' +
+            'If it still fails, update/reinstall Gemini CLI and retry.'
         );
     }
     if (message.includes('No refresh token')) {
@@ -662,9 +696,10 @@ function resolveClaudeModel(modelId, fallbackModel = CLAUDE_SAFE_DEFAULT_MODEL) 
 /**
  * Gemini OAuth 클라이언트 초기화 (토큰 자동 갱신)
  */
-function initGeminiAuth() {
+function initGeminiAuth(options = {}) {
+    const preferCliDefaults = options.preferCliDefaults === true;
     const { credsPath, creds } = readGeminiCredsFile();
-    const { clientId, clientSecret, source } = resolveGeminiOAuthClient(creds);
+    const { clientId, clientSecret, source } = resolveGeminiOAuthClient(creds, { preferCliDefaults });
     if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) {
         throw new Error(
             'Gemini OAuth client config could not be resolved. ' +
@@ -688,6 +723,7 @@ function initGeminiAuth() {
         token_type: creds.token_type || 'Bearer',
         expiry_date: creds.expiry_date,
     });
+    geminiAuthSource = source || 'unknown';
 
     // 토큰 갱신 시 파일에도 저장
     oauth2Client.on('tokens', (tokens) => {
@@ -791,8 +827,21 @@ async function geminiGenerateContentInner(prompt, model) {
         const accessToken = await geminiAuth.getAccessToken();
         token = normalizeModelId(accessToken?.token || '');
     } catch (e) {
-        geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
-        throw new Error(formatGeminiAuthError(e));
+        // oauth_creds의 client_id/client_secret가 무효해진 경우, gemini-cli 기본값으로 1회 자동 재시도
+        if (isGeminiInvalidClientError(e) && geminiAuthSource === 'oauth_creds') {
+            console.warn('[gemini] invalid_client with oauth_creds client, retrying with gemini-cli OAuth defaults');
+            try {
+                geminiAuth = initGeminiAuth({ preferCliDefaults: true });
+                const retryAccessToken = await geminiAuth.getAccessToken();
+                token = normalizeModelId(retryAccessToken?.token || '');
+            } catch (retryError) {
+                geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
+                throw new Error(formatGeminiAuthError(retryError));
+            }
+        } else {
+            geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
+            throw new Error(formatGeminiAuthError(e));
+        }
     }
     if (!token) {
         geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
