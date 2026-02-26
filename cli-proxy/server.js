@@ -4,7 +4,7 @@
  *
  * Claude: CLI spawn 방식 유지 (API 키 없이 SDK 전환 불가)
  * Codex:  CLI spawn 방식 유지 (OAuth 토큰 교환 절차가 독점적)
- * Gemini: Code Assist API 직접 호출 (OAuth 토큰 재사용, ~7x 속도 향상)
+ * Gemini: 기본 CLI spawn (IVLYRICS_GEMINI_MODE=sdk로 SDK(Code Assist API) 전환 가능)
  *
  * 사용법:
  *   npm install
@@ -56,7 +56,7 @@ const PORT = process.env.PORT || 19284;
 const DEFAULT_TIMEOUT_MS = 120000;        // Default CLI process timeout
 const TOOL_CHECK_TIMEOUT_MS = 10000;      // Tool availability check timeout (spawnSync)
 const HEALTH_CHECK_TIMEOUT_MS = 12000;    // Per-tool timeout in /health endpoint
-const MAX_RETRY_WAIT_MS = 30000;          // Max wait per 429 rate-limit retry
+const MAX_RETRY_WAIT_MS = 120000;         // Max wait per 429 rate-limit retry
 const GEMINI_PROJECT_ID_TTL_MS = 86400000; // Project ID cache TTL (24 hours)
 const RATE_LIMIT_WINDOW_MS = 60000;       // Rate limit window (1 minute)
 const RATE_LIMIT_MAX_REQUESTS = 120;      // Max /generate requests per window
@@ -98,7 +98,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.1.0';
+const LOCAL_VERSION = '2.1.1';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -126,12 +126,24 @@ function extractLocalAddonVersion(filePath) {
     }
 }
 
-function getSpicetifyAddonDir() {
-    const isWin = process.platform === 'win32';
-    if (isWin) {
-        return path.join(process.env.APPDATA || '', 'spicetify', 'CustomApps', 'ivLyrics');
+function getSpicetifyConfigDir() {
+    if (process.platform !== 'win32') {
+        return path.join(os.homedir(), '.config', 'spicetify');
     }
-    return path.join(os.homedir(), '.config', 'spicetify', 'CustomApps', 'ivLyrics');
+
+    const winAppDataDir = process.env.APPDATA
+        ? path.join(process.env.APPDATA, 'spicetify')
+        : '';
+    const winUserConfigDir = path.join(os.homedir(), '.config', 'spicetify');
+    const candidates = [winAppDataDir, winUserConfigDir].filter(Boolean);
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    return candidates[0] || winUserConfigDir;
+}
+
+function getSpicetifyAddonDir() {
+    return path.join(getSpicetifyConfigDir(), 'CustomApps', 'ivLyrics');
 }
 
 async function checkForUpdates(force = false) {
@@ -204,6 +216,7 @@ app.use(express.json({ limit: '10mb' }));
 // Rate limiter state for /generate endpoint
 let rateLimitCount = 0;
 let rateLimitWindowStart = Date.now();
+let isShuttingDown = false;
 
 function checkRateLimit() {
     const now = Date.now();
@@ -216,6 +229,45 @@ function checkRateLimit() {
     return true;
 }
 
+function throwIfAborted(signal) {
+    if (signal?.aborted) {
+        throw new Error('Request aborted by client');
+    }
+}
+
+function sleepWithSignal(ms, signal) {
+    if (!signal) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    if (signal.aborted) {
+        return Promise.reject(new Error('Request aborted by client'));
+    }
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+
+        const onAbort = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+            reject(new Error('Request aborted by client'));
+        };
+
+        signal.addEventListener('abort', onAbort);
+    });
+}
+
+function isAbortLikeError(error) {
+    const message = String(error?.message || '').toLowerCase();
+    return (
+        error?.name === 'AbortError' ||
+        message.includes('aborted') ||
+        message.includes('aborterror') ||
+        message.includes('request aborted by client')
+    );
+}
+
 // ============================================
 // Gemini SDK (Code Assist API)
 // ============================================
@@ -223,6 +275,19 @@ function checkRateLimit() {
 // Gemini OAuth client values are loaded from ~/.gemini/oauth_creds.json.
 const CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com/v1internal';
 const GEMINI_REASONING_OFF_CONFIG = Object.freeze({ thinkingConfig: { thinkingBudget: 0 } });
+const GEMINI_DEFAULT_MODEL = 'gemini-2.5-flash';
+const GEMINI_RUNTIME_MODE = String(
+    process.env.IVLYRICS_GEMINI_MODE || process.env.GEMINI_MODE || 'cli'
+).trim().toLowerCase();
+const GEMINI_USE_CLI_SPAWN = GEMINI_RUNTIME_MODE === 'cli' || GEMINI_RUNTIME_MODE === 'spawn';
+const GEMINI_MODEL_ALIAS_MAP = Object.freeze({
+    '3.0-flash': 'gemini-3-flash-preview',
+    '3-flash': 'gemini-3-flash-preview',
+    '3-flash-preview': 'gemini-3-flash-preview',
+    'gemini-3.0-flash': 'gemini-3-flash-preview',
+    'gemini-3-flash': 'gemini-3-flash-preview',
+    'gemini-3.0-flash-preview': 'gemini-3-flash-preview',
+});
 const CLAUDE_REASONING_OFF_SYSTEM_PROMPT =
     'Reasoning mode is disabled. Do not use extended thinking. ' +
     'Return concise final answers without chain-of-thought or step-by-step deliberation.';
@@ -627,6 +692,97 @@ function isGeminiInvalidClientError(error) {
     return oauthCode === 'invalid_client' || message.toLowerCase().includes('invalid_client');
 }
 
+function resetGeminiAuthState(options = {}) {
+    const clearCliDefaults = options.clearCliDefaults === true;
+    geminiAuth = null;
+    geminiAuthSource = 'unknown';
+    if (clearCliDefaults) {
+        geminiCliOAuthDefaultsCache = null;
+    }
+}
+
+async function requestGeminiAccessToken(options = {}) {
+    const reinit = options.reinit === true;
+    const initOptions = options.initOptions || {};
+    const clearCliDefaults = options.clearCliDefaults === true;
+    const signal = options.signal || null;
+
+    throwIfAborted(signal);
+
+    if (clearCliDefaults) {
+        geminiCliOAuthDefaultsCache = null;
+    }
+
+    if (!geminiAuth || reinit) {
+        geminiAuth = initGeminiAuth(initOptions);
+    }
+
+    const accessToken = await geminiAuth.getAccessToken();
+    throwIfAborted(signal);
+    const token = normalizeModelId(accessToken?.token || '');
+    if (!token) {
+        throw new Error('Gemini OAuth access token is empty. Run `gemini` CLI again to re-authenticate.');
+    }
+    return token;
+}
+
+async function getGeminiAccessTokenWithRecovery(signal = null) {
+    try {
+        return await requestGeminiAccessToken({ signal });
+    } catch (primaryError) {
+        if (isAbortLikeError(primaryError)) {
+            resetGeminiAuthState();
+            throw new Error('Request aborted by client');
+        }
+        if (!isGeminiInvalidClientError(primaryError)) {
+            resetGeminiAuthState();
+            throw new Error(formatGeminiAuthError(primaryError));
+        }
+
+        const source = geminiAuthSource || 'unknown';
+        console.warn(`[gemini] invalid_client detected (source: ${source}). Trying auth recovery...`);
+
+        const recoveryAttempts = [
+            {
+                label: 'gemini-cli defaults',
+                options: {
+                    reinit: true,
+                    initOptions: { preferCliDefaults: true },
+                    clearCliDefaults: true,
+                    signal,
+                },
+            },
+            {
+                label: 'oauth_creds',
+                options: {
+                    reinit: true,
+                    initOptions: { preferCliDefaults: false },
+                    signal,
+                },
+            },
+        ];
+
+        let lastError = primaryError;
+        for (const attempt of recoveryAttempts) {
+            try {
+                const token = await requestGeminiAccessToken(attempt.options);
+                console.log(`[gemini] Auth recovery succeeded via ${attempt.label}`);
+                return token;
+            } catch (recoveryError) {
+                if (isAbortLikeError(recoveryError)) {
+                    resetGeminiAuthState({ clearCliDefaults: true });
+                    throw new Error('Request aborted by client');
+                }
+                lastError = recoveryError;
+                console.warn(`[gemini] Auth recovery via ${attempt.label} failed: ${recoveryError.message}`);
+            }
+        }
+
+        resetGeminiAuthState({ clearCliDefaults: true });
+        throw new Error(formatGeminiAuthError(lastError));
+    }
+}
+
 function formatGeminiAuthError(error) {
     const { message, oauthCode, oauthDescription } = getGeminiAuthErrorInfo(error);
 
@@ -646,7 +802,7 @@ function formatGeminiAuthError(error) {
         return (
             'Gemini OAuth client credentials are invalid (invalid_client). ' +
             'Run `gemini` CLI again to re-authenticate. ' +
-            'If it still fails, update/reinstall Gemini CLI and retry.'
+            'If it still fails: delete ~/.gemini/oauth_creds.json, update/reinstall Gemini CLI, then run `gemini` again.'
         );
     }
     if (message.includes('No refresh token')) {
@@ -690,6 +846,36 @@ function resolveClaudeModel(modelId, fallbackModel = CLAUDE_SAFE_DEFAULT_MODEL) 
     if (!normalized || isBlockedClaudeModel(normalized)) {
         return normalizeModelId(fallbackModel);
     }
+    return normalized;
+}
+
+function normalizeGeminiModel(modelId) {
+    const normalized = normalizeModelId(modelId)
+        .toLowerCase()
+        .replace(/^models\//, '')
+        .replace(/_/g, '-')
+        .replace(/\s+/g, '-');
+    if (!normalized) return '';
+
+    if (GEMINI_MODEL_ALIAS_MAP[normalized]) {
+        return GEMINI_MODEL_ALIAS_MAP[normalized];
+    }
+
+    if (normalized.startsWith('gemini-')) {
+        return normalized;
+    }
+
+    if (/^\d+(\.\d+)?-(flash|pro)(-.+)?$/.test(normalized)) {
+        const withPrefix = `gemini-${normalized}`;
+        return GEMINI_MODEL_ALIAS_MAP[withPrefix] || withPrefix;
+    }
+
+    return normalized;
+}
+
+function resolveGeminiModel(modelId, fallbackModel = GEMINI_DEFAULT_MODEL) {
+    const normalized = normalizeGeminiModel(modelId);
+    if (!normalized) return normalizeGeminiModel(fallbackModel) || GEMINI_DEFAULT_MODEL;
     return normalized;
 }
 
@@ -745,14 +931,16 @@ function initGeminiAuth(options = {}) {
 /**
  * Code Assist 프로젝트 ID 가져오기 (TTL 기반 캐시, 기본 24시간)
  */
-async function getGeminiProjectId(token) {
+async function getGeminiProjectId(token, signal = null) {
     const now = Date.now();
     if (geminiProjectId && (now - geminiProjectIdTs) < GEMINI_PROJECT_ID_TTL_MS) {
         return geminiProjectId;
     }
 
+    throwIfAborted(signal);
     const response = await fetch(`${CODE_ASSIST_ENDPOINT}:loadCodeAssist`, {
         method: 'POST',
+        signal,
         headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -810,53 +998,47 @@ async function processGeminiQueue() {
     geminiQueueRunning = false;
 }
 
+function extractGeminiResetSeconds(errorBody) {
+    const text = String(errorBody || '');
+    const match = text.match(/reset\s+after\s+(\d+)\s*s/i);
+    if (!match) return 0;
+    const seconds = parseInt(match[1], 10);
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+}
+
+function resolveGeminiRetryWaitMs(response, errorBody, attempt) {
+    const retryAfterSeconds = parseInt(response.headers.get('retry-after') || '0', 10);
+    const retryAfterMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? retryAfterSeconds * 1000
+        : 0;
+    const resetMs = extractGeminiResetSeconds(errorBody) * 1000;
+    const backoffMs = 2000 * (attempt + 1);
+    const waitMs = Math.max(retryAfterMs, resetMs, backoffMs);
+    return Math.min(waitMs, MAX_RETRY_WAIT_MS);
+}
+
 /**
  * Gemini Code Assist API로 직접 호출 (rate limit 재시도 포함)
  */
-async function geminiGenerateContent(prompt, model) {
-    return enqueueGeminiRequest(() => geminiGenerateContentInner(prompt, model));
+async function geminiGenerateContent(prompt, model, signal = null) {
+    return enqueueGeminiRequest(() => geminiGenerateContentInner(prompt, model, signal));
 }
 
-async function geminiGenerateContentInner(prompt, model) {
-    if (!geminiAuth) {
-        geminiAuth = initGeminiAuth();
-    }
+async function geminiGenerateContentInner(prompt, model, signal = null) {
+    throwIfAborted(signal);
+    const token = await getGeminiAccessTokenWithRecovery(signal);
 
-    let token = '';
-    try {
-        const accessToken = await geminiAuth.getAccessToken();
-        token = normalizeModelId(accessToken?.token || '');
-    } catch (e) {
-        // oauth_creds의 client_id/client_secret가 무효해진 경우, gemini-cli 기본값으로 1회 자동 재시도
-        if (isGeminiInvalidClientError(e) && geminiAuthSource === 'oauth_creds') {
-            console.warn('[gemini] invalid_client with oauth_creds client, retrying with gemini-cli OAuth defaults');
-            try {
-                geminiAuth = initGeminiAuth({ preferCliDefaults: true });
-                const retryAccessToken = await geminiAuth.getAccessToken();
-                token = normalizeModelId(retryAccessToken?.token || '');
-            } catch (retryError) {
-                geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
-                throw new Error(formatGeminiAuthError(retryError));
-            }
-        } else {
-            geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
-            throw new Error(formatGeminiAuthError(e));
-        }
-    }
-    if (!token) {
-        geminiAuth = null; // 다음 요청 시 파일에서 새 인증 정보를 읽어오도록 초기화
-        throw new Error('Gemini OAuth access token is empty. Run `gemini` CLI again to re-authenticate.');
-    }
-
-    const projectId = await getGeminiProjectId(token);
+    const projectId = await getGeminiProjectId(token, signal);
     const endpoint = `${CODE_ASSIST_ENDPOINT}:generateContent`;
 
     const MAX_RETRIES = 3;
     let lastError = null;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        throwIfAborted(signal);
         let response = await fetch(endpoint, {
             method: 'POST',
+            signal,
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
@@ -870,10 +1052,10 @@ async function geminiGenerateContentInner(prompt, model) {
 
         // Rate limit → wait and retry (capped at MAX_RETRY_WAIT_MS)
         if (response.status === 429) {
-            const retryAfter = parseInt(response.headers.get('retry-after') || '0', 10);
-            const waitMs = Math.min(Math.max(retryAfter * 1000, 2000 * (attempt + 1)), MAX_RETRY_WAIT_MS);
+            const errorBody = await response.text();
+            const waitMs = resolveGeminiRetryWaitMs(response, errorBody, attempt);
             console.warn(`[gemini] Rate limited (429), waiting ${waitMs}ms before retry ${attempt + 1}/${MAX_RETRIES}`);
-            await new Promise(r => setTimeout(r, waitMs));
+            await sleepWithSignal(waitMs, signal);
             continue;
         }
 
@@ -883,6 +1065,7 @@ async function geminiGenerateContentInner(prompt, model) {
                 console.warn('[gemini] thinking disable config not supported for this request, retrying without it');
                 response = await fetch(endpoint, {
                     method: 'POST',
+                    signal,
                     headers: {
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json',
@@ -895,15 +1078,16 @@ async function geminiGenerateContentInner(prompt, model) {
                 });
 
                 if (response.status === 429) {
-                    const waitMs = Math.min(2000 * (attempt + 1), MAX_RETRY_WAIT_MS);
+                    const retryErrorBody = await response.text();
+                    const waitMs = resolveGeminiRetryWaitMs(response, retryErrorBody, attempt);
                     console.warn(`[gemini] Rate limited (429) on fallback, waiting ${waitMs}ms`);
-                    await new Promise(r => setTimeout(r, waitMs));
+                    await sleepWithSignal(waitMs, signal);
                     continue;
                 }
 
                 if (!response.ok) {
-                    const retryErrorBody = await response.text();
-                    lastError = new Error(`Gemini API error ${response.status}: ${retryErrorBody}`);
+                    const fallbackErrorBody = await response.text();
+                    lastError = new Error(`Gemini API error ${response.status}: ${fallbackErrorBody}`);
                     continue;
                 }
             } else {
@@ -920,7 +1104,20 @@ async function geminiGenerateContentInner(prompt, model) {
         return text;
     }
 
+    throwIfAborted(signal);
     throw lastError || new Error('Gemini API: max retries exceeded');
+}
+
+function buildGeminiCliArgs(prompt, model, defaultModel) {
+    const useModel = resolveGeminiModel(model || defaultModel, GEMINI_DEFAULT_MODEL);
+    const args = [
+        '--prompt',
+        prompt,
+        '--output-format',
+        'text',
+    ];
+    if (useModel) args.unshift('--model', useModel);
+    return args;
 }
 
 // ============================================
@@ -953,16 +1150,26 @@ const CLI_TOOLS = {
         parseOutput: (stdout) => stdout.trim()
     },
 
-    // Gemini - Code Assist API 직접 호출 (OAuth 토큰 재사용)
+    // Gemini - SDK(Code Assist API) or CLI spawn (runtime toggle)
     gemini: {
-        mode: 'sdk',
+        mode: GEMINI_USE_CLI_SPAWN ? 'cli' : 'sdk',
         command: 'gemini',
-        checkCommand: null,
-        defaultModel: 'gemini-2.5-flash',
-        generate: async (prompt, model) => {
-            return await geminiGenerateContent(prompt, model || 'gemini-2.5-flash');
+        checkCommand: GEMINI_USE_CLI_SPAWN ? 'gemini --version' : null,
+        defaultModel: GEMINI_DEFAULT_MODEL,
+        buildArgs: GEMINI_USE_CLI_SPAWN
+            ? (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel)
+            : null,
+        parseOutput: GEMINI_USE_CLI_SPAWN
+            ? (stdout) => stdout.trim()
+            : null,
+        generate: async (prompt, model, signal) => {
+            const useModel = resolveGeminiModel(model, GEMINI_DEFAULT_MODEL);
+            return await geminiGenerateContent(prompt, useModel, signal);
         },
         checkAvailable: async () => {
+            if (GEMINI_USE_CLI_SPAWN) {
+                return { available: true };
+            }
             try {
                 const { creds } = readGeminiCredsFile();
                 const { clientId, clientSecret } = resolveGeminiOAuthClient(creds);
@@ -1264,7 +1471,7 @@ function discoverGeminiModels() {
         const modelRegex = /"model"\s*:\s*"([^"]+)"/g;
         let match;
         while ((match = modelRegex.exec(text)) !== null) {
-            const modelId = normalizeModelId(match[1]);
+            const modelId = normalizeGeminiModel(match[1]);
             if (modelId.startsWith('gemini-')) {
                 addModelToMap(map, modelId, 'gemini-history');
             }
@@ -1320,6 +1527,11 @@ async function getModelsForTool(toolId, forceRefresh = false) {
  */
 const MAX_CONCURRENT_CLI = 5;
 let activeCLIProcesses = 0;
+let activeSDKProcesses = 0;
+
+function getActiveRequestCount() {
+    return activeCLIProcesses + activeSDKProcesses;
+}
 
 /**
  * CLI 도구 실행 (spawn 방식)
@@ -1441,7 +1653,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
 /**
  * SDK 도구 실행
  */
-async function runSDK(toolId, prompt, model = '', timeout = 120000) {
+async function runSDK(toolId, prompt, model = '', timeout = 120000, signal = null) {
     const tool = CLI_TOOLS[toolId];
     if (!tool) {
         throw new Error(`Unknown tool: ${toolId}`);
@@ -1455,17 +1667,43 @@ async function runSDK(toolId, prompt, model = '', timeout = 120000) {
     console.log(`  Prompt: "${promptPreview}"`);
     console.log(`${'='.repeat(60)}`);
 
-    const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Timeout after ${timeout}ms`)), timeout)
-    );
+    activeSDKProcesses++;
+    let timeoutTriggered = false;
+    const sdkController = new AbortController();
+    let timeoutId = null;
+    let onAbort = null;
 
-    const result = await Promise.race([
-        tool.generate(prompt, model || tool.defaultModel),
-        timeoutPromise,
-    ]);
+    try {
+        if (signal?.aborted) {
+            throw new Error('Request aborted by client');
+        }
 
-    console.log(`[${toolId}] SUCCESS - Response length: ${result.length} chars`);
-    return result;
+        if (signal) {
+            onAbort = () => sdkController.abort();
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        timeoutId = setTimeout(() => {
+            timeoutTriggered = true;
+            sdkController.abort();
+        }, timeout);
+
+        const result = await tool.generate(prompt, model || tool.defaultModel, sdkController.signal);
+        console.log(`[${toolId}] SUCCESS - Response length: ${result.length} chars`);
+        return result;
+    } catch (e) {
+        if (timeoutTriggered) {
+            throw new Error(`Timeout after ${timeout}ms`);
+        }
+        if (signal?.aborted || isAbortLikeError(e)) {
+            throw new Error('Request aborted by client');
+        }
+        throw e;
+    } finally {
+        activeSDKProcesses--;
+        if (timeoutId) clearTimeout(timeoutId);
+        if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    }
 }
 
 /**
@@ -1478,7 +1716,7 @@ async function runTool(toolId, prompt, model = '', timeout = 120000, signal = nu
     }
 
     if (tool.mode === 'sdk') {
-        return await runSDK(toolId, prompt, model, timeout);
+        return await runSDK(toolId, prompt, model, timeout, signal);
     } else {
         return await runCLI(toolId, prompt, model, timeout, signal);
     }
@@ -1639,13 +1877,18 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
  * SDK 도구 SSE 스트리밍 (SDK는 스트리밍 미지원 → 단일 chunk)
  */
 async function runSDKStream(toolId, prompt, model, timeout, res) {
+    const ac = new AbortController();
+    const onClose = () => ac.abort();
+    res.on('close', onClose);
     try {
-        const result = await runSDK(toolId, prompt, model, timeout);
+        const result = await runSDK(toolId, prompt, model, timeout, ac.signal);
         sendSSEChunk(res, result);
         sendSSEDone(res);
     } catch (e) {
         sendSSEError(res, e.message);
         sendSSEDone(res);
+    } finally {
+        res.off('close', onClose);
     }
 }
 
@@ -1762,6 +2005,10 @@ app.get('/models', async (req, res) => {
  * 특정 도구로 프롬프트 실행
  */
 app.post('/generate', async (req, res) => {
+    if (isShuttingDown) {
+        return res.status(503).json({ error: 'Server is shutting down. Please retry.' });
+    }
+
     const { tool, model, prompt, timeout, stream } = req.body;
     const streamEnabled = stream === true || stream === 'true' || req.query.stream === 'true';
 
@@ -1770,12 +2017,15 @@ app.post('/generate', async (req, res) => {
     }
 
     // Model ID validation
-    const normalizedModel = normalizeModelId(model || '');
-    if (normalizedModel) {
-        if (normalizedModel.length > 200) {
+    let requestedModel = normalizeModelId(model || '');
+    if (tool === 'gemini') {
+        requestedModel = normalizeGeminiModel(requestedModel);
+    }
+    if (requestedModel) {
+        if (requestedModel.length > 200) {
             return res.status(400).json({ error: 'Model ID too long (max 200 chars)' });
         }
-        if (!/^[\w\-.]+$/.test(normalizedModel)) {
+        if (!/^[\w\-.]+$/.test(requestedModel)) {
             return res.status(400).json({ error: 'Invalid model ID: only alphanumeric, hyphens, underscores, and dots allowed' });
         }
     }
@@ -1795,9 +2045,9 @@ app.post('/generate', async (req, res) => {
         : DEFAULT_TIMEOUT_MS;
 
     if (streamEnabled) {
-        console.log(`[API] Stream request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${model || 'default'}, prompt length: ${prompt.length}`);
+        console.log(`[API] Stream request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${requestedModel || 'default'}, prompt length: ${prompt.length}`);
         setupSSE(res);
-        runToolStream(tool, prompt, model || '', effectiveTimeout, res);
+        runToolStream(tool, prompt, requestedModel || '', effectiveTimeout, res);
         return;
     }
 
@@ -1808,9 +2058,9 @@ app.post('/generate', async (req, res) => {
     });
 
     try {
-        console.log(`[API] Generate request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${model || 'default'}, prompt length: ${prompt.length}`);
+        console.log(`[API] Generate request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${requestedModel || 'default'}, prompt length: ${prompt.length}`);
         const startTime = Date.now();
-        const result = await runTool(tool, prompt, model || '', effectiveTimeout, ac.signal);
+        const result = await runTool(tool, prompt, requestedModel || '', effectiveTimeout, ac.signal);
         const elapsed = Date.now() - startTime;
         console.log(`[API] Completed in ${elapsed}ms`);
         if (!res.writableEnded) {
@@ -1819,7 +2069,7 @@ app.post('/generate', async (req, res) => {
                 result,
                 tool,
                 mode: CLI_TOOLS[tool]?.mode,
-                model: model || CLI_TOOLS[tool]?.defaultModel || 'default',
+                model: requestedModel || CLI_TOOLS[tool]?.defaultModel || 'default',
                 elapsed_ms: elapsed
             });
         }
@@ -1920,6 +2170,37 @@ app.post('/update', async (req, res) => {
                 const pkgResult = await downloadFile('cli-proxy/package.json', pkgLocalPath, 'package.json');
                 results.push(pkgResult);
             } catch {}
+
+            const npmCommandPath = resolveCommandPath('npm');
+            if (!npmCommandPath) {
+                console.warn('[update] npm not found; skipping dependency install after proxy update');
+                results.push({
+                    file: 'npm install',
+                    status: 'skipped',
+                    note: 'npm not found in PATH; restart may fail if new dependencies are required'
+                });
+            } else {
+                console.log(`[update] Running dependency install: ${npmCommandPath} install`);
+                const npmInstallResult = spawnSync(npmCommandPath, ['install'], {
+                    cwd: __dirname,
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                    encoding: 'utf8',
+                    timeout: 180000,
+                    env: { ...process.env },
+                    shell: shouldUseShellForCommand(npmCommandPath),
+                    windowsHide: true,
+                });
+
+                if (npmInstallResult.error || npmInstallResult.status !== 0) {
+                    const detail =
+                        normalizeModelId(npmInstallResult.stderr) ||
+                        normalizeModelId(npmInstallResult.stdout) ||
+                        (npmInstallResult.error ? npmInstallResult.error.message : `exit code ${npmInstallResult.status}`);
+                    throw new Error(`npm install failed after proxy update: ${detail}`);
+                }
+                results.push({ file: 'npm install', status: 'ok' });
+            }
+
             needsRestart = true;
             results.push({ file: 'proxy', status: 'updated', note: 'Server will restart automatically' });
         }
@@ -1944,7 +2225,6 @@ app.post('/update', async (req, res) => {
         if (needsRestart) {
             console.log('[update] Proxy updated. Restarting server in 1 second...');
             setTimeout(() => {
-                const { execSync } = require('child_process');
                 const serverPath = path.join(__dirname, 'server.js');
                 const child = spawn(process.execPath, [serverPath], {
                     stdio: 'ignore',
@@ -2007,8 +2287,6 @@ app.post('/v1/chat/completions', async (req, res) => {
 // Graceful Shutdown
 // ============================================
 
-let isShuttingDown = false;
-
 function gracefulShutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
@@ -2021,11 +2299,12 @@ function gracefulShutdown(signal) {
     forceExit.unref();
 
     const waitAndExit = () => {
-        if (activeCLIProcesses <= 0) {
+        const activeRequests = getActiveRequestCount();
+        if (activeRequests <= 0) {
             console.log('[server] Shutdown complete.');
             process.exit(0);
         } else {
-            console.log(`[server] Waiting for ${activeCLIProcesses} CLI process(es)...`);
+            console.log(`[server] Waiting for ${activeRequests} in-flight request(s)...`);
             setTimeout(waitAndExit, 300);
         }
     };
@@ -2035,14 +2314,6 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Reject new /generate requests during shutdown
-app.use('/generate', (req, res, next) => {
-    if (isShuttingDown) {
-        return res.status(503).json({ error: 'Server is shutting down. Please retry.' });
-    }
-    next();
-});
-
 // ============================================
 // Start Server
 // ============================================
@@ -2050,6 +2321,7 @@ app.use('/generate', (req, res, next) => {
 app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n🚀 ivLyrics CLI Proxy Server v${LOCAL_VERSION}`);
     console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
+    console.log(`   Gemini mode: ${GEMINI_USE_CLI_SPAWN ? 'CLI spawn' : 'SDK (Code Assist API)'}`);
     console.log(`\n📋 Available endpoints:`);
     console.log(`   GET  /health   - Check server status and available tools`);
     console.log(`   GET  /tools    - List available CLI tools`);

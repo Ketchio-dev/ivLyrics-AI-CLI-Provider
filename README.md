@@ -68,7 +68,7 @@ npm.cmd start
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.1.0
+🚀 ivLyrics CLI Proxy Server v2.1.1
    Running on http://localhost:19284
 ```
 
@@ -76,13 +76,14 @@ Then open Spotify and enable the provider in ivLyrics settings.
 
 The command above auto-installs `cli-proxy` on first run (Addon Store install case).
 
-## Gemini SDK authentication
+## Gemini mode
 
-Gemini is handled in SDK mode and needs `oauth_creds.json` from Gemini CLI login.
+Gemini runs in CLI spawn mode by default.
 
-1. Run `gemini` once and complete login.
-2. Ensure `~/.gemini/oauth_creds.json` exists.
-3. If `oauth_creds.json` lacks `client_id`/`client_secret`, proxy auto-resolves them from your installed Gemini CLI runtime.
+- Default: `IVLYRICS_GEMINI_MODE=cli`
+- Optional SDK mode: `IVLYRICS_GEMINI_MODE=sdk`
+
+SDK mode needs `~/.gemini/oauth_creds.json` from Gemini CLI login.
 
 
 ## License

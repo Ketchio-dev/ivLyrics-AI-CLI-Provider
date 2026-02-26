@@ -8,7 +8,7 @@
 |------|---------|------|-------------|
 | **Claude Code** | `claude` | CLI | Anthropic Claude 구독자용 CLI |
 | **Codex** | `codex` | CLI | OpenAI Codex CLI |
-| **Gemini** | `gemini` | SDK | Google Gemini CLI (Code Assist API 직접 호출) |
+| **Gemini** | `gemini` | CLI (default) | Google Gemini CLI (`IVLYRICS_GEMINI_MODE=sdk`로 SDK 전환 가능) |
 
 ## 설치
 
@@ -110,10 +110,14 @@ curl -X POST http://localhost:19284/v1/chat/completions \
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `PORT` | `19284` | 서버 포트 |
+| `IVLYRICS_GEMINI_MODE` | `cli` | `cli`/`spawn`이면 Gemini CLI spawn, `sdk`이면 Code Assist API 직접 호출 |
 
-## Gemini SDK 인증
+## Gemini mode / SDK 인증
 
-Gemini는 SDK 방식이라 `gemini login`으로 생성되는 `oauth_creds.json`이 필요합니다.
+Gemini는 기본적으로 CLI spawn 모드입니다.
+SDK 모드가 필요하면 실행 전에 `IVLYRICS_GEMINI_MODE=sdk`를 설정하세요.
+
+Gemini SDK 모드는 `gemini login`으로 생성되는 `oauth_creds.json`이 필요합니다.
 기본적으로 `oauth_creds.json`의 `client_id`/`client_secret`를 자동으로 사용합니다.
 `oauth_creds.json`에 위 값이 없으면 설치된 Gemini CLI 런타임에서 자동으로 가져옵니다.
 
