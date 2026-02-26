@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.5
+ * @version 2.0.6
  */
 
 (() => {
@@ -394,7 +394,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.5',
+            version: '2.0.6',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -417,9 +417,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         }
 
         function getSelectedModel() {
-            // Manual model selection is intentionally disabled.
-            // We always let the proxy choose and expose the resolved model in settings.
-            return '';
+            const rawModel = sanitizeModel(getSetting('model', ''), safeDefaultModel);
+            if (!rawModel) return '';
+            return toolId === 'gemini' ? (normalizeGeminiModelId(rawModel) || rawModel) : rawModel;
         }
 
         async function checkProxyHealth() {
@@ -657,8 +657,6 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
             async init() {
                 console.log(`${LOG_TAG} Initialized (v${ADDON_INFO.version})`);
-                setSetting('model', '');
-                setSetting('custom-model', '');
                 checkAddonUpdate(id, getProxyUrl()).catch(() => {});
             },
 
@@ -678,6 +676,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                 return function CLIProviderSettings() {
                     const [proxyUrl, setProxyUrl] = useState(getSetting('proxy-url', DEFAULT_PROXY_URL));
+                    const [availableModels, setAvailableModels] = useState([]);
+                    const [selectedModel, setSelectedModel] = useState(getSelectedModel());
                     const [resolvedModel, setResolvedModel] = useState('');
                     const [resolvedSource, setResolvedSource] = useState('');
                     const [modelsLoading, setModelsLoading] = useState(false);
@@ -689,8 +689,29 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         setModelsLoading(true);
                         try {
                             const result = await fetchAvailableModels(proxyUrl);
+                            const models = Array.isArray(result.models) ? result.models : [];
+                            setAvailableModels(models);
                             setResolvedModel((result.defaultModel || '').toString().trim());
                             setResolvedSource((result.source || '').toString().trim());
+
+                            const saved = getSelectedModel();
+                            const modelIds = models.map(m => m.id);
+                            let nextModel = saved;
+                            if (!nextModel || !modelIds.includes(nextModel)) {
+                                const discoveredDefault = sanitizeModel(result.defaultModel || '', safeDefaultModel);
+                                const normalizedDefault = toolId === 'gemini'
+                                    ? (normalizeGeminiModelId(discoveredDefault) || discoveredDefault)
+                                    : discoveredDefault;
+                                if (normalizedDefault && modelIds.includes(normalizedDefault)) {
+                                    nextModel = normalizedDefault;
+                                } else if (models.length > 0) {
+                                    nextModel = models[0].id;
+                                } else {
+                                    nextModel = '';
+                                }
+                                setSetting('model', nextModel);
+                            }
+                            setSelectedModel(nextModel);
                         } finally {
                             setModelsLoading(false);
                         }
@@ -702,6 +723,13 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         const value = e.target.value;
                         setProxyUrl(value);
                         setSetting('proxy-url', value);
+                    }, []);
+
+                    const handleModelChange = useCallback((e) => {
+                        const value = e.target.value;
+                        const normalized = toolId === 'gemini' ? (normalizeGeminiModelId(value) || value) : value;
+                        setSelectedModel(normalized);
+                        setSetting('model', normalized);
                     }, []);
 
                     const handleTest = useCallback(async () => {
@@ -821,13 +849,18 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         ),
 
                         React.createElement('div', { className: 'ai-addon-setting' },
-                            React.createElement('label', null, 'Responding Model (Auto)'),
+                            React.createElement('label', null, 'Model'),
                             React.createElement('div', { className: 'ai-addon-input-group' },
-                                React.createElement('input', {
-                                    type: 'text',
-                                    value: resolvedModel || 'default',
-                                    readOnly: true
-                                }),
+                                React.createElement('select', {
+                                    value: selectedModel || '',
+                                    onChange: handleModelChange,
+                                    disabled: modelsLoading || availableModels.length === 0
+                                },
+                                    availableModels.map(model => React.createElement('option', {
+                                        key: model.id,
+                                        value: model.id
+                                    }, model.name || model.id))
+                                ),
                                 React.createElement('button', {
                                     onClick: loadModels,
                                     className: 'ai-addon-btn-secondary',
@@ -838,9 +871,11 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             React.createElement(
                                 'small',
                                 null,
-                                resolvedSource
-                                    ? `Manual model input is disabled. Proxy reports this model (source: ${resolvedSource}).`
-                                    : 'Manual model input is disabled. Proxy automatically selects the responding model.'
+                                availableModels.length > 0
+                                    ? (resolvedSource
+                                        ? `Select a CLI-discovered model (source: ${resolvedSource}, proxy default: ${resolvedModel || 'n/a'}).`
+                                        : `Select a CLI-discovered model (proxy default: ${resolvedModel || 'n/a'}).`)
+                                    : 'No discovered models yet. Start proxy and click refresh.'
                             )
                         ),
 
