@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.3
+ * @version 2.0.4
  */
 
 (() => {
@@ -14,6 +14,14 @@
     const CUSTOM_MODEL_OPTION = '__custom__';
     const ADDON_UPDATE_CHECK_TTL = 3600000;
     const MAX_REGISTER_RETRIES = 100;
+    const GEMINI_MODEL_ALIAS_MAP = Object.freeze({
+        '3.0-flash': 'gemini-3-flash-preview',
+        '3-flash': 'gemini-3-flash-preview',
+        '3-flash-preview': 'gemini-3-flash-preview',
+        'gemini-3.0-flash': 'gemini-3-flash-preview',
+        'gemini-3-flash': 'gemini-3-flash-preview',
+        'gemini-3.0-flash-preview': 'gemini-3-flash-preview',
+    });
     const BRIDGE_STATE_KEY = '__ivLyricsCliProviderMarketplaceBridge';
     const MARKETPLACE_ADDON_ID = (() => {
         try {
@@ -48,6 +56,32 @@
         if (!lang) return LANGUAGE_DATA['en'];
         const shortLang = lang.split('-')[0].toLowerCase();
         return LANGUAGE_DATA[lang] || LANGUAGE_DATA[shortLang] || LANGUAGE_DATA['en'];
+    }
+
+    function normalizeGeminiModelId(modelId) {
+        const normalized = (modelId || '')
+            .toString()
+            .trim()
+            .toLowerCase()
+            .replace(/^models\//, '')
+            .replace(/_/g, '-')
+            .replace(/\s+/g, '-');
+        if (!normalized) return '';
+
+        if (GEMINI_MODEL_ALIAS_MAP[normalized]) {
+            return GEMINI_MODEL_ALIAS_MAP[normalized];
+        }
+
+        if (normalized.startsWith('gemini-')) {
+            return normalized;
+        }
+
+        if (/^\d+(\.\d+)?-(flash|pro)(-.+)?$/.test(normalized)) {
+            const withPrefix = `gemini-${normalized}`;
+            return GEMINI_MODEL_ALIAS_MAP[withPrefix] || withPrefix;
+        }
+
+        return normalized;
     }
 
     // ============================================
@@ -256,6 +290,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             },
             toolId: 'gemini',
             fallbackModels: [
+                { id: 'gemini-3.0-flash', name: 'gemini-3.0-flash' },
                 { id: 'gemini-3-flash-preview', name: 'gemini-3-flash-preview' },
                 { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro' },
                 { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash' },
@@ -266,7 +301,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             safeDefaultModel: '',
             isBlockedModel: () => false,
             useCopyrightNotice: false,
-            customModelPlaceholder: 'e.g., gemini-2.5-pro',
+            customModelPlaceholder: 'e.g., gemini-3.0-flash',
         },
         {
             id: 'cli-codex',
@@ -362,7 +397,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.3',
+            version: '2.0.4',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -385,7 +420,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         }
 
         function getSelectedModel() {
-            return sanitizeModel(getSetting('model', ''), '');
+            const selected = sanitizeModel(getSetting('model', ''), '');
+            if (toolId !== 'gemini') return selected;
+            return normalizeGeminiModelId(selected);
         }
 
         async function checkProxyHealth() {
@@ -407,14 +444,20 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 const response = await fetch(`${proxyUrl}/models?tool=${toolId}&refresh=1`);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
-                const models = (Array.isArray(data.models) ? data.models : [])
+                const modelMap = new Map();
+                (Array.isArray(data.models) ? data.models : [])
                     .map(model => {
                         if (typeof model === 'string') return { id: model.trim(), name: model.trim() };
-                        const mid = (model?.id || '').toString().trim();
+                        const rawId = (model?.id || '').toString().trim();
+                        const mid = toolId === 'gemini' ? (normalizeGeminiModelId(rawId) || rawId) : rawId;
                         const mname = (model?.name || mid).toString().trim();
                         return { id: mid, name: mname };
                     })
-                    .filter(m => m.id && !isBlockedModel(m.id));
+                    .filter(m => m.id && !isBlockedModel(m.id))
+                    .forEach(m => {
+                        if (!modelMap.has(m.id)) modelMap.set(m.id, m);
+                    });
+                const models = Array.from(modelMap.values());
                 return {
                     models: models.length > 0 ? models : fallbackModels,
                     defaultModel: sanitizeModel((data?.defaultModel || '').toString().trim(), safeDefaultModel)
