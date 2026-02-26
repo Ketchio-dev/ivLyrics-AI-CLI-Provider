@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 
 ```bash
 # macOS / Linux
-cd ~/.config/spicetify/cli-proxy && npm start
+cfg="$(spicetify -c 2>/dev/null || true)"; base="${cfg%/*}"; [ -n "$base" ] || base="$HOME/.config/spicetify"; proxy="$base/cli-proxy"; if [ ! -d "$proxy" ]; then curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy; fi; [ -d "$proxy" ] || proxy="$HOME/.config/spicetify/cli-proxy"; cd "$proxy" || exit 1; [ -d node_modules ] || npm install; npm start
 
 # Windows PowerShell
 $cfg = $null
@@ -54,9 +54,14 @@ if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg = (spicetify -c 
 $dirs = @()
 if ($cfg) { $dirs += (Split-Path $cfg -Parent) }
 $dirs += "$env:APPDATA\spicetify", "$env:USERPROFILE\.config\spicetify", "$env:USERPROFILE\.spicetify"
-$base = $dirs | Where-Object { $_ -and (Test-Path (Join-Path $_ "cli-proxy")) } | Select-Object -First 1
-if (!$base) { Write-Host "cli-proxy not found. Run install.ps1 -Proxy first." -ForegroundColor Yellow; exit 1 }
-Set-Location (Join-Path $base "cli-proxy")
+$proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (!$proxyDir) {
+  & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy
+  $proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if (!$proxyDir) { Write-Host "cli-proxy install failed." -ForegroundColor Red; exit 1 }
+Set-Location $proxyDir
+if (!(Test-Path (Join-Path $proxyDir "node_modules"))) { npm.cmd install }
 npm.cmd start
 ```
 
@@ -69,11 +74,7 @@ Expected output:
 
 Then open Spotify and enable the provider in ivLyrics settings.
 
-If `cli-proxy` does not exist (Addon Store install only), install proxy files first:
-
-```powershell
-& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy
-```
+The command above auto-installs `cli-proxy` on first run (Addon Store install case).
 
 ## Gemini SDK authentication
 
