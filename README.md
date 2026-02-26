@@ -49,7 +49,10 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 cd ~/.config/spicetify/cli-proxy && npm start
 
 # Windows PowerShell
-cd "$env:APPDATA\spicetify\cli-proxy"; npm start
+$proxyDir = "$env:APPDATA\spicetify\cli-proxy"
+if (!(Test-Path $proxyDir)) { $proxyDir = "$env:USERPROFILE\.config\spicetify\cli-proxy" }
+Set-Location $proxyDir
+npm.cmd start
 ```
 
 Expected output:
@@ -60,6 +63,12 @@ Expected output:
 ```
 
 Then open Spotify and enable the provider in ivLyrics settings.
+
+If `cli-proxy` does not exist (Addon Store install only), install proxy files first:
+
+```powershell
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy
+```
 
 ## Gemini SDK authentication
 

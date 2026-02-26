@@ -171,16 +171,19 @@ function Install-Proxy {
         return
     }
 
-    $npm = Get-Command npm -ErrorAction SilentlyContinue
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if ($null -eq $npm) {
-        Write-Warn "npm not found. Run `cd $CliProxyDir; npm install` manually."
+        $npm = Get-Command npm -ErrorAction SilentlyContinue
+    }
+    if ($null -eq $npm) {
+        Write-Warn "npm not found. Run `cd $CliProxyDir; npm.cmd install` manually."
         return
     }
 
     Push-Location $CliProxyDir
     try {
         Write-Info "Running npm install in $CliProxyDir"
-        npm install
+        & $npm.Source install
         Write-Ok "npm install completed"
     } finally {
         Pop-Location

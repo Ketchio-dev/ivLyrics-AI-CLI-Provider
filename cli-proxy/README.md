@@ -17,10 +17,25 @@ cd ~/.config/spicetify/cli-proxy
 npm install
 ```
 
+Windows PowerShell:
+
+```powershell
+$proxyDir = "$env:APPDATA\spicetify\cli-proxy"
+if (!(Test-Path $proxyDir)) { $proxyDir = "$env:USERPROFILE\.config\spicetify\cli-proxy" }
+Set-Location $proxyDir
+npm.cmd install
+```
+
 ## 실행
 
 ```bash
 npm start
+```
+
+Windows PowerShell:
+
+```powershell
+npm.cmd start
 ```
 
 서버가 `http://localhost:19284`에서 시작됩니다.
@@ -107,6 +122,15 @@ codex --version
 
 # 예: Gemini - OAuth 자격증명 확인
 ls ~/.gemini/oauth_creds.json
+```
+
+### Windows에서 `npm.ps1` 실행 정책 오류
+
+PowerShell에서 `npm` 대신 `npm.cmd`를 사용하세요.
+
+```powershell
+npm.cmd install
+npm.cmd start
 ```
 
 ### 서버 연결 실패

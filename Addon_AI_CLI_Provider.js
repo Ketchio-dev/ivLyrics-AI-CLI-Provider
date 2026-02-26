@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.0
+ * @version 2.0.1
  */
 
 (() => {
@@ -14,6 +14,14 @@
     const CUSTOM_MODEL_OPTION = '__custom__';
     const ADDON_UPDATE_CHECK_TTL = 3600000;
     const MAX_REGISTER_RETRIES = 100;
+    const BRIDGE_STATE_KEY = '__ivLyricsCliProviderMarketplaceBridge';
+    const MARKETPLACE_ADDON_ID = (() => {
+        try {
+            return document.currentScript?.dataset?.marketplaceAddon || '';
+        } catch {
+            return '';
+        }
+    })();
 
     const LANGUAGE_DATA = {
         'ko': { name: 'Korean', native: '한국어' },
@@ -286,6 +294,60 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         }
     ];
 
+    function installMarketplaceUnregisterBridge(providerIds) {
+        if (!MARKETPLACE_ADDON_ID || !window.AIAddonManager || typeof window.AIAddonManager.unregister !== 'function') {
+            return;
+        }
+
+        const manager = window.AIAddonManager;
+        const bridgeState = window[BRIDGE_STATE_KEY] || {
+            patched: false,
+            originalUnregister: null,
+            mappings: {}
+        };
+
+        bridgeState.mappings[MARKETPLACE_ADDON_ID] = Array.from(new Set(providerIds || []));
+
+        if (!bridgeState.patched) {
+            bridgeState.originalUnregister = manager.unregister.bind(manager);
+            manager.unregister = function unregisterWithMarketplaceBridge(addonId) {
+                const baseRemoved = bridgeState.originalUnregister(addonId);
+                const mappedIds = bridgeState.mappings[addonId];
+                if (!Array.isArray(mappedIds) || mappedIds.length === 0) {
+                    return baseRemoved;
+                }
+
+                let mappedRemoved = false;
+                for (const mappedId of mappedIds) {
+                    try {
+                        mappedRemoved = !!bridgeState.originalUnregister(mappedId) || mappedRemoved;
+                    } catch (e) {
+                        console.warn('[CLI Provider] Failed to unregister mapped addon:', mappedId, e?.message || e);
+                    }
+                }
+
+                try {
+                    if (typeof manager.getProviderOrder === 'function' && typeof manager.setProviderOrder === 'function') {
+                        const order = manager.getProviderOrder();
+                        if (Array.isArray(order)) {
+                            const filtered = order.filter(id => !mappedIds.includes(id));
+                            if (filtered.length !== order.length) {
+                                manager.setProviderOrder(filtered);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[CLI Provider] Failed to cleanup provider order:', e?.message || e);
+                }
+
+                return !!baseRemoved || mappedRemoved;
+            };
+            bridgeState.patched = true;
+        }
+
+        window[BRIDGE_STATE_KEY] = bridgeState;
+    }
+
     // ============================================
     // Addon Factory
     // ============================================
@@ -300,7 +362,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.0',
+            version: '2.0.1',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -336,7 +398,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 return await response.json();
             } catch (e) {
-                throw new Error(`Proxy server not running at ${proxyUrl}. Start with: cd cli-proxy && npm start`);
+                throw new Error(`Proxy server not running at ${proxyUrl}. Start with the setup command shown in addon settings.`);
             }
         }
 
@@ -363,7 +425,51 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             }
         }
 
-        async function callProxyStream(prompt, maxRetries = 2) {
+        function getErrorMessage(error) {
+            if (!error) return '';
+            if (typeof error === 'string') return error;
+            return String(error.message || error).trim();
+        }
+
+        function isTransportRetryableError(message) {
+            const lower = String(message || '').toLowerCase();
+            return (
+                lower.includes('econnrefused') ||
+                lower.includes('server not running') ||
+                lower.includes('networkerror') ||
+                lower.includes('failed to fetch') ||
+                lower.includes('fetch failed') ||
+                lower.includes('socket hang up') ||
+                lower.includes('empty response from stream') ||
+                lower.includes('request aborted') ||
+                lower.includes('timeout') ||
+                lower.includes('http 502') ||
+                lower.includes('http 503') ||
+                lower.includes('http 504')
+            );
+        }
+
+        function isDeterministicProxyError(message) {
+            const lower = String(message || '').toLowerCase();
+            return (
+                lower.includes('gemini api error 429') ||
+                lower.includes('rate limit exceeded') ||
+                lower.includes('invalid_client') ||
+                lower.includes('invalid_grant') ||
+                lower.includes('invalid_request') ||
+                lower.includes('model id too long') ||
+                lower.includes('invalid model id') ||
+                lower.includes('missing tool or prompt') ||
+                lower.includes('unknown tool') ||
+                lower.includes('too many concurrent requests')
+            );
+        }
+
+        function shouldFallbackToLegacy(message) {
+            return isTransportRetryableError(message) && !isDeterministicProxyError(message);
+        }
+
+        async function callProxyStream(prompt, maxRetries = 1) {
             const proxyUrl = getProxyUrl();
             const model = getSelectedModel();
             let lastError = null;
@@ -434,9 +540,14 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                 } catch (e) {
                     lastError = e;
-                    console.warn(`${LOG_TAG} Stream attempt ${attempt + 1} failed:`, e.message);
-                    if (e.message.includes('not running') || e.message.includes('ECONNREFUSED')) {
-                        throw new Error(`${LOG_TAG} Server not running. Start with: cd cli-proxy && npm start`);
+                    const message = getErrorMessage(e);
+                    const lower = message.toLowerCase();
+                    console.warn(`${LOG_TAG} Stream attempt ${attempt + 1} failed:`, message);
+                    if (lower.includes('not running') || lower.includes('econnrefused')) {
+                        throw new Error(`${LOG_TAG} Server not running. Start with the setup command shown in addon settings.`);
+                    }
+                    if (!isTransportRetryableError(message)) {
+                        throw e;
                     }
                     if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
                 }
@@ -445,7 +556,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             throw lastError || new Error(`${LOG_TAG} All retries exhausted`);
         }
 
-        async function callProxyLegacy(prompt, maxRetries = 2) {
+        async function callProxyLegacy(prompt, maxRetries = 1) {
             const proxyUrl = getProxyUrl();
             const model = getSelectedModel();
             let lastError = null;
@@ -469,9 +580,14 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                 } catch (e) {
                     lastError = e;
-                    console.warn(`${LOG_TAG} Attempt ${attempt + 1} failed:`, e.message);
-                    if (e.message.includes('not running') || e.message.includes('ECONNREFUSED')) {
-                        throw new Error(`${LOG_TAG} Server not running. Start with: cd cli-proxy && npm start`);
+                    const message = getErrorMessage(e);
+                    const lower = message.toLowerCase();
+                    console.warn(`${LOG_TAG} Attempt ${attempt + 1} failed:`, message);
+                    if (lower.includes('not running') || lower.includes('econnrefused')) {
+                        throw new Error(`${LOG_TAG} Server not running. Start with the setup command shown in addon settings.`);
+                    }
+                    if (!isTransportRetryableError(message)) {
+                        throw e;
                     }
                     if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
                 }
@@ -480,11 +596,15 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             throw lastError || new Error(`${LOG_TAG} All retries exhausted`);
         }
 
-        async function callProxy(prompt, maxRetries = 2) {
+        async function callProxy(prompt, maxRetries = 1) {
             try {
                 return await callProxyStream(prompt, maxRetries);
             } catch (e) {
-                console.warn(`${LOG_TAG} Stream failed, falling back to legacy:`, e.message);
+                const message = getErrorMessage(e);
+                if (!shouldFallbackToLegacy(message)) {
+                    throw e;
+                }
+                console.warn(`${LOG_TAG} Stream transport failed, falling back to legacy:`, message);
                 return await callProxyLegacy(prompt, maxRetries);
             }
         }
@@ -637,7 +757,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                     const isWindows = /Windows/i.test(navigator.userAgent || '');
                     const setupCommand = isWindows
-                        ? 'cd "$env:APPDATA\\spicetify\\cli-proxy"; npm install; npm start'
+                        ? '$proxyDir="$env:APPDATA\\spicetify\\cli-proxy"; if (!(Test-Path $proxyDir)) { $proxyDir="$env:USERPROFILE\\.config\\spicetify\\cli-proxy" }; if (!(Test-Path $proxyDir)) { Write-Host "cli-proxy not found. Run install.ps1 -Proxy first." -ForegroundColor Yellow; exit 1 }; Set-Location $proxyDir; npm.cmd install; npm.cmd start'
                         : 'cd ~/.config/spicetify/cli-proxy && npm install && npm start';
 
                     const handleCopyCommand = useCallback(async () => {
@@ -803,10 +923,12 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
     // ============================================
 
     const addons = TOOL_CONFIGS.map(createAddon);
+    const addonIds = addons.map(addon => addon.id);
 
     let registerAttempts = 0;
     const registerAddons = () => {
         if (window.AIAddonManager) {
+            installMarketplaceUnregisterBridge(addonIds);
             addons.forEach(addon => window.AIAddonManager.register(addon));
             console.log('[CLI Provider] All addons registered');
         } else if (++registerAttempts < MAX_REGISTER_RETRIES) {

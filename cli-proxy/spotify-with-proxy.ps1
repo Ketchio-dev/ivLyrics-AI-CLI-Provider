@@ -38,6 +38,14 @@ function Write-LogOk   { param($Msg) Write-Host "[ivLyrics Proxy] $Msg" -Foregro
 function Write-LogWarn { param($Msg) Write-Host "[ivLyrics Proxy] $Msg" -ForegroundColor Yellow }
 function Write-LogErr  { param($Msg) Write-Host "[ivLyrics Proxy] $Msg" -ForegroundColor Red }
 
+function Get-NpmCommandPath {
+    $npmCmd = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
+    if ($null -ne $npmCmd) { return $npmCmd.Source }
+    $npm = Get-Command 'npm' -ErrorAction SilentlyContinue
+    if ($null -ne $npm) { return $npm.Source }
+    return $null
+}
+
 # ── Proxy status check ───────────────────────────────────────────────────────
 
 function Test-ProxyRunning {
@@ -65,9 +73,14 @@ function Start-Proxy {
 
     $nodeModules = Join-Path $CliProxyDir 'node_modules'
     if (-not (Test-Path $nodeModules)) {
+        $npmPath = Get-NpmCommandPath
+        if ([string]::IsNullOrWhiteSpace($npmPath)) {
+            Write-LogErr "npm not found. Install Node.js first."
+            return
+        }
         Write-Log "Installing dependencies..."
         Push-Location $CliProxyDir
-        try { & npm install --silent 2>&1 | Out-Null } finally { Pop-Location }
+        try { & $npmPath install --silent 2>&1 | Out-Null } finally { Pop-Location }
     }
 
     Write-Log "Starting proxy server..."
