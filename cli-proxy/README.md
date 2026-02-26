@@ -127,8 +127,8 @@ claude --version
 # 예: Codex 설치 확인
 codex --version
 
-# 예: Gemini - OAuth 자격증명 확인
-ls ~/.gemini/oauth_creds.json
+# 예: Gemini CLI 설치 확인
+gemini --version
 ```
 
 ### Windows에서 `npm.ps1` 실행 정책 오류

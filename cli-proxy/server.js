@@ -56,8 +56,6 @@ const PORT = process.env.PORT || 19284;
 const DEFAULT_TIMEOUT_MS = 120000;        // Default CLI process timeout
 const TOOL_CHECK_TIMEOUT_MS = 10000;      // Tool availability check timeout (spawnSync)
 const HEALTH_CHECK_TIMEOUT_MS = 12000;    // Per-tool timeout in /health endpoint
-const MAX_RETRY_WAIT_MS = 120000;         // Max wait per 429 rate-limit retry
-const GEMINI_PROJECT_ID_TTL_MS = 86400000; // Project ID cache TTL (24 hours)
 const RATE_LIMIT_WINDOW_MS = 60000;       // Rate limit window (1 minute)
 const RATE_LIMIT_MAX_REQUESTS = 120;      // Max /generate requests per window
 const UPDATE_CACHE_MAX_SIZE = 1048576;    // 1MB — skip cache if result is larger
@@ -98,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.1.2';
+const LOCAL_VERSION = '2.1.3';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -229,45 +227,6 @@ function checkRateLimit() {
     return true;
 }
 
-function throwIfAborted(signal) {
-    if (signal?.aborted) {
-        throw new Error('Request aborted by client');
-    }
-}
-
-function sleepWithSignal(ms, signal) {
-    if (!signal) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-    if (signal.aborted) {
-        return Promise.reject(new Error('Request aborted by client'));
-    }
-    return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-            signal.removeEventListener('abort', onAbort);
-            resolve();
-        }, ms);
-
-        const onAbort = () => {
-            clearTimeout(timer);
-            signal.removeEventListener('abort', onAbort);
-            reject(new Error('Request aborted by client'));
-        };
-
-        signal.addEventListener('abort', onAbort);
-    });
-}
-
-function isAbortLikeError(error) {
-    const message = String(error?.message || '').toLowerCase();
-    return (
-        error?.name === 'AbortError' ||
-        message.includes('aborted') ||
-        message.includes('aborterror') ||
-        message.includes('request aborted by client')
-    );
-}
-
 // ============================================
 // Gemini model normalization
 // ============================================
@@ -285,19 +244,6 @@ const CLAUDE_REASONING_OFF_SYSTEM_PROMPT =
     'Reasoning mode is disabled. Do not use extended thinking. ' +
     'Return concise final answers without chain-of-thought or step-by-step deliberation.';
 const CLAUDE_SAFE_DEFAULT_MODEL = 'claude-sonnet-4-5';
-
-let geminiAuth = null;          // OAuth2Client 캐시
-let geminiProjectId = null;     // Code Assist 프로젝트 ID 캐시
-let geminiProjectIdTs = 0;      // 프로젝트 ID 캐시 타임스탬프
-let geminiAuthSource = 'unknown'; // 현재 OAuth client source
-
-function hasGeminiOAuthClientConfig(clientId, clientSecret) {
-    const id = normalizeModelId(clientId);
-    const secret = normalizeModelId(clientSecret);
-    return Boolean(id && secret && id.length >= 8 && secret.length >= 8);
-}
-
-let geminiCliOAuthDefaultsCache = null;
 
 function trimShellLine(value) {
     return normalizeModelId(String(value || '').replace(/^['"](.*)['"]$/, '$1'));
@@ -464,371 +410,6 @@ function getCliCheckArgs(tool) {
     return tokens;
 }
 
-function discoverGeminiExecutablePaths() {
-    const candidates = process.platform === 'win32'
-        ? readCommandLines('where gemini')
-        : [
-            ...readCommandLines('command -v gemini'),
-            ...readCommandLines('which gemini')
-        ];
-    const unique = [];
-    for (const candidate of candidates) {
-        if (candidate && !unique.includes(candidate)) {
-            unique.push(candidate);
-        }
-    }
-    return unique;
-}
-
-function safeRealpath(filePath) {
-    try {
-        return fs.realpathSync(filePath);
-    } catch {
-        return '';
-    }
-}
-
-function getGeminiCliOAuthCandidateFiles() {
-    const files = [];
-    const addFile = (candidatePath) => {
-        const normalized = trimShellLine(candidatePath);
-        if (!normalized || files.includes(normalized)) return;
-        files.push(normalized);
-    };
-    const suffixes = [
-        path.join(
-            'libexec',
-            'lib',
-            'node_modules',
-            '@google',
-            'gemini-cli',
-            'node_modules',
-            '@google',
-            'gemini-cli-core',
-            'dist',
-            'src',
-            'code_assist',
-            'oauth2.js'
-        ),
-        path.join(
-            'lib',
-            'node_modules',
-            '@google',
-            'gemini-cli',
-            'node_modules',
-            '@google',
-            'gemini-cli-core',
-            'dist',
-            'src',
-            'code_assist',
-            'oauth2.js'
-        ),
-        path.join(
-            'node_modules',
-            '@google',
-            'gemini-cli',
-            'node_modules',
-            '@google',
-            'gemini-cli-core',
-            'dist',
-            'src',
-            'code_assist',
-            'oauth2.js'
-        ),
-    ];
-    const executablePaths = discoverGeminiExecutablePaths();
-    const roots = [];
-    const addRoot = (rootPath) => {
-        const normalized = trimShellLine(rootPath);
-        if (!normalized || roots.includes(normalized)) return;
-        roots.push(normalized);
-    };
-    const addRootChain = (startPath, maxDepth = 10) => {
-        let current = trimShellLine(startPath);
-        for (let depth = 0; depth < maxDepth; depth++) {
-            if (!current) break;
-            addRoot(current);
-            const parent = path.dirname(current);
-            if (!parent || parent === current) break;
-            current = parent;
-        }
-    };
-
-    for (const executablePath of executablePaths) {
-        addRootChain(path.dirname(executablePath));
-        const realPath = safeRealpath(executablePath);
-        if (realPath) {
-            addRootChain(path.dirname(realPath));
-        }
-    }
-
-    for (const root of roots) {
-        for (const suffix of suffixes) {
-            addFile(path.join(root, suffix));
-        }
-    }
-
-    return files;
-}
-
-function parseGeminiCliOAuthConstants(filePath) {
-    try {
-        if (!fs.existsSync(filePath)) return null;
-        const content = fs.readFileSync(filePath, 'utf8');
-        const clientIdMatch = content.match(/const\s+OAUTH_CLIENT_ID\s*=\s*['"]([^'"]+)['"]/);
-        const clientSecretMatch = content.match(/const\s+OAUTH_CLIENT_SECRET\s*=\s*['"]([^'"]+)['"]/);
-        const clientId = normalizeModelId(clientIdMatch?.[1] || '');
-        const clientSecret = normalizeModelId(clientSecretMatch?.[1] || '');
-        if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) return null;
-        return {
-            clientId,
-            clientSecret,
-            source: filePath,
-        };
-    } catch {
-        return null;
-    }
-}
-
-function resolveGeminiCliOAuthDefaults() {
-    if (geminiCliOAuthDefaultsCache) {
-        return geminiCliOAuthDefaultsCache;
-    }
-
-    const candidates = getGeminiCliOAuthCandidateFiles();
-    for (const candidate of candidates) {
-        const parsed = parseGeminiCliOAuthConstants(candidate);
-        if (parsed) {
-            geminiCliOAuthDefaultsCache = parsed;
-            return parsed;
-        }
-    }
-
-    geminiCliOAuthDefaultsCache = {
-        clientId: '',
-        clientSecret: '',
-        source: '',
-    };
-    return geminiCliOAuthDefaultsCache;
-}
-
-function getGeminiCredsPath() {
-    return path.join(os.homedir(), '.gemini', 'oauth_creds.json');
-}
-
-function readGeminiCredsFile() {
-    const credsPath = getGeminiCredsPath();
-    if (!fs.existsSync(credsPath)) {
-        throw new Error('Gemini OAuth credentials not found. Run `gemini` CLI first to authenticate.');
-    }
-    try {
-        const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-        return { credsPath, creds };
-    } catch {
-        throw new Error(`Gemini OAuth credentials are invalid JSON: ${credsPath}`);
-    }
-}
-
-function resolveGeminiOAuthClient(creds, options = {}) {
-    const preferCliDefaults = options.preferCliDefaults === true;
-    const credsClientId = normalizeModelId(creds?.client_id || creds?.clientId || '');
-    const credsClientSecret = normalizeModelId(creds?.client_secret || creds?.clientSecret || '');
-    const credsConfig = hasGeminiOAuthClientConfig(credsClientId, credsClientSecret)
-        ? {
-            clientId: credsClientId,
-            clientSecret: credsClientSecret,
-            source: 'oauth_creds'
-        }
-        : null;
-
-    const defaults = resolveGeminiCliOAuthDefaults();
-    const defaultsConfig = hasGeminiOAuthClientConfig(defaults.clientId, defaults.clientSecret)
-        ? {
-            clientId: defaults.clientId,
-            clientSecret: defaults.clientSecret,
-            source: defaults.source ? `gemini-cli:${defaults.source}` : 'gemini-cli',
-        }
-        : null;
-
-    if (preferCliDefaults) {
-        if (defaultsConfig) return defaultsConfig;
-        if (credsConfig) return credsConfig;
-    } else {
-        if (credsConfig) return credsConfig;
-        if (defaultsConfig) return defaultsConfig;
-    }
-
-    return { clientId: '', clientSecret: '', source: 'missing' };
-}
-
-function getGeminiAuthErrorInfo(error) {
-    const message = String(error?.message || '').trim();
-    const oauthData = error?.response?.data;
-
-    let oauthCode = normalizeModelId(typeof oauthData?.error === 'string' ? oauthData.error : '');
-    const oauthDescription = normalizeModelId(
-        typeof oauthData?.error_description === 'string' ? oauthData.error_description : ''
-    );
-
-    if (!oauthCode) {
-        const lowered = message.toLowerCase();
-        if (lowered.includes('invalid_client')) oauthCode = 'invalid_client';
-        else if (lowered.includes('invalid_grant')) oauthCode = 'invalid_grant';
-        else if (lowered.includes('invalid_request')) oauthCode = 'invalid_request';
-    }
-
-    return { message, oauthCode, oauthDescription };
-}
-
-function isGeminiInvalidClientError(error) {
-    const { message, oauthCode } = getGeminiAuthErrorInfo(error);
-    return oauthCode === 'invalid_client' || message.toLowerCase().includes('invalid_client');
-}
-
-function resetGeminiAuthState(options = {}) {
-    const clearCliDefaults = options.clearCliDefaults === true;
-    geminiAuth = null;
-    geminiAuthSource = 'unknown';
-    if (clearCliDefaults) {
-        geminiCliOAuthDefaultsCache = null;
-    }
-}
-
-async function requestGeminiAccessToken(options = {}) {
-    const reinit = options.reinit === true;
-    const initOptions = options.initOptions || {};
-    const clearCliDefaults = options.clearCliDefaults === true;
-    const signal = options.signal || null;
-
-    throwIfAborted(signal);
-
-    if (clearCliDefaults) {
-        geminiCliOAuthDefaultsCache = null;
-    }
-
-    if (!geminiAuth || reinit) {
-        geminiAuth = initGeminiAuth(initOptions);
-    }
-
-    const accessToken = await geminiAuth.getAccessToken();
-    throwIfAborted(signal);
-    const token = normalizeModelId(accessToken?.token || '');
-    if (!token) {
-        throw new Error('Gemini OAuth access token is empty. Run `gemini` CLI again to re-authenticate.');
-    }
-    return token;
-}
-
-async function getGeminiAccessTokenWithRecovery(signal = null) {
-    try {
-        return await requestGeminiAccessToken({ signal });
-    } catch (primaryError) {
-        if (isAbortLikeError(primaryError)) {
-            resetGeminiAuthState();
-            throw new Error('Request aborted by client');
-        }
-        if (!isGeminiInvalidClientError(primaryError)) {
-            resetGeminiAuthState();
-            throw new Error(formatGeminiAuthError(primaryError));
-        }
-
-        const source = geminiAuthSource || 'unknown';
-        console.warn(`[gemini] invalid_client detected (source: ${source}). Trying auth recovery...`);
-
-        const recoveryAttempts = [
-            {
-                label: 'gemini-cli defaults',
-                options: {
-                    reinit: true,
-                    initOptions: { preferCliDefaults: true },
-                    clearCliDefaults: true,
-                    signal,
-                },
-            },
-            {
-                label: 'oauth_creds',
-                options: {
-                    reinit: true,
-                    initOptions: { preferCliDefaults: false },
-                    signal,
-                },
-            },
-        ];
-
-        let lastError = primaryError;
-        for (const attempt of recoveryAttempts) {
-            try {
-                const token = await requestGeminiAccessToken(attempt.options);
-                console.log(`[gemini] Auth recovery succeeded via ${attempt.label}`);
-                return token;
-            } catch (recoveryError) {
-                if (isAbortLikeError(recoveryError)) {
-                    resetGeminiAuthState({ clearCliDefaults: true });
-                    throw new Error('Request aborted by client');
-                }
-                lastError = recoveryError;
-                console.warn(`[gemini] Auth recovery via ${attempt.label} failed: ${recoveryError.message}`);
-            }
-        }
-
-        resetGeminiAuthState({ clearCliDefaults: true });
-        throw new Error(formatGeminiAuthError(lastError));
-    }
-}
-
-function formatGeminiAuthError(error) {
-    const { message, oauthCode, oauthDescription } = getGeminiAuthErrorInfo(error);
-
-    if (oauthCode === 'invalid_request') {
-        return (
-            'Gemini OAuth token refresh failed (invalid_request). ' +
-            'Run `gemini` CLI again to re-authenticate.'
-        );
-    }
-    if (oauthCode === 'invalid_grant') {
-        return (
-            'Gemini OAuth token refresh failed (invalid_grant). ' +
-            'Run `gemini` CLI again to re-authenticate.'
-        );
-    }
-    if (oauthCode === 'invalid_client') {
-        return (
-            'Gemini OAuth client credentials are invalid (invalid_client). ' +
-            'Run `gemini` CLI again to re-authenticate. ' +
-            'If it still fails: delete ~/.gemini/oauth_creds.json, update/reinstall Gemini CLI, then run `gemini` again.'
-        );
-    }
-    if (message.includes('No refresh token')) {
-        return 'Gemini OAuth refresh token is missing. Run `gemini` CLI again to re-authenticate.';
-    }
-
-    if (oauthCode && oauthDescription) {
-        return `Gemini OAuth error (${oauthCode}): ${oauthDescription}`;
-    }
-    return message || 'Unknown Gemini OAuth error';
-}
-
-function buildGeminiGenerateRequest(prompt, disableReasoning) {
-    const request = {
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    };
-    if (disableReasoning) {
-        request.generationConfig = GEMINI_REASONING_OFF_CONFIG;
-    }
-    return request;
-}
-
-function isGeminiThinkingConfigError(status, errorBody) {
-    if (status !== 400 && status !== 422) return false;
-    const text = String(errorBody || '').toLowerCase();
-    return (
-        text.includes('thinkingconfig') ||
-        text.includes('thinking_budget') ||
-        text.includes('thinkingbudget') ||
-        text.includes('unknown field') && text.includes('thinking')
-    );
-}
-
 function isBlockedClaudeModel(modelId) {
     const value = normalizeModelId(modelId).toLowerCase();
     return value.includes('haiku');
@@ -870,235 +451,6 @@ function resolveGeminiModel(modelId, fallbackModel = GEMINI_DEFAULT_MODEL) {
     const normalized = normalizeGeminiModel(modelId);
     if (!normalized) return normalizeGeminiModel(fallbackModel) || GEMINI_DEFAULT_MODEL;
     return normalized;
-}
-
-/**
- * Gemini OAuth 클라이언트 초기화 (토큰 자동 갱신)
- */
-function initGeminiAuth(options = {}) {
-    const preferCliDefaults = options.preferCliDefaults === true;
-    const { credsPath, creds } = readGeminiCredsFile();
-    const { clientId, clientSecret, source } = resolveGeminiOAuthClient(creds, { preferCliDefaults });
-    if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) {
-        throw new Error(
-            'Gemini OAuth client config could not be resolved. ' +
-            'Check that `gemini` CLI is installed, run `gemini` to re-authenticate, ' +
-            'and verify ~/.gemini/oauth_creds.json exists.'
-        );
-    }
-    if (source && source !== 'oauth_creds') {
-        console.log(`[gemini] OAuth client loaded from ${source}`);
-    }
-
-    const { OAuth2Client } = require('google-auth-library');
-
-    const oauth2Client = new OAuth2Client(
-        clientId,
-        clientSecret,
-    );
-    oauth2Client.setCredentials({
-        access_token: creds.access_token,
-        refresh_token: creds.refresh_token,
-        token_type: creds.token_type || 'Bearer',
-        expiry_date: creds.expiry_date,
-    });
-    geminiAuthSource = source || 'unknown';
-
-    // 토큰 갱신 시 파일에도 저장
-    oauth2Client.on('tokens', (tokens) => {
-        console.log('[gemini] Token refreshed automatically');
-        try {
-            const updated = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-            if (tokens.access_token) updated.access_token = tokens.access_token;
-            if (tokens.refresh_token) updated.refresh_token = tokens.refresh_token;
-            if (tokens.expiry_date) updated.expiry_date = tokens.expiry_date;
-            fs.writeFileSync(credsPath, JSON.stringify(updated, null, 2));
-        } catch (e) {
-            console.error('[gemini] Failed to save refreshed token to file:', e.message);
-        }
-    });
-
-    return oauth2Client;
-}
-
-/**
- * Code Assist 프로젝트 ID 가져오기 (TTL 기반 캐시, 기본 24시간)
- */
-async function getGeminiProjectId(token, signal = null) {
-    const now = Date.now();
-    if (geminiProjectId && (now - geminiProjectIdTs) < GEMINI_PROJECT_ID_TTL_MS) {
-        return geminiProjectId;
-    }
-
-    throwIfAborted(signal);
-    const response = await fetch(`${CODE_ASSIST_ENDPOINT}:loadCodeAssist`, {
-        method: 'POST',
-        signal,
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            metadata: {
-                ideType: 'IDE_UNSPECIFIED',
-                platform: 'PLATFORM_UNSPECIFIED',
-                pluginType: 'GEMINI',
-            },
-        }),
-    });
-
-    if (!response.ok) {
-        throw new Error(`Code Assist loadCodeAssist failed: ${response.status}`);
-    }
-
-    const data = await response.json();
-    geminiProjectId = data.cloudaicompanionProject;
-    geminiProjectIdTs = Date.now();
-    if (!geminiProjectId) {
-        throw new Error('No project ID from Code Assist. Run `gemini` CLI to complete setup.');
-    }
-    console.log(`[gemini] Code Assist project: ${geminiProjectId}`);
-    return geminiProjectId;
-}
-
-/**
- * Gemini 요청 직렬화 큐 (동시 요청 → rate limit 방지)
- */
-const geminiQueue = [];
-let geminiQueueRunning = false;
-
-function enqueueGeminiRequest(fn) {
-    return new Promise((resolve, reject) => {
-        geminiQueue.push({ fn, resolve, reject });
-        processGeminiQueue();
-    });
-}
-
-async function processGeminiQueue() {
-    if (geminiQueueRunning || geminiQueue.length === 0) return;
-    geminiQueueRunning = true;
-
-    while (geminiQueue.length > 0) {
-        const { fn, resolve, reject } = geminiQueue.shift();
-        try {
-            const result = await fn();
-            resolve(result);
-        } catch (e) {
-            reject(e);
-        }
-    }
-
-    geminiQueueRunning = false;
-}
-
-function extractGeminiResetSeconds(errorBody) {
-    const text = String(errorBody || '');
-    const match = text.match(/reset\s+after\s+(\d+)\s*s/i);
-    if (!match) return 0;
-    const seconds = parseInt(match[1], 10);
-    return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
-}
-
-function resolveGeminiRetryWaitMs(response, errorBody, attempt) {
-    const retryAfterSeconds = parseInt(response.headers.get('retry-after') || '0', 10);
-    const retryAfterMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-        ? retryAfterSeconds * 1000
-        : 0;
-    const resetMs = extractGeminiResetSeconds(errorBody) * 1000;
-    const backoffMs = 2000 * (attempt + 1);
-    const waitMs = Math.max(retryAfterMs, resetMs, backoffMs);
-    return Math.min(waitMs, MAX_RETRY_WAIT_MS);
-}
-
-/**
- * Gemini Code Assist API로 직접 호출 (rate limit 재시도 포함)
- */
-async function geminiGenerateContent(prompt, model, signal = null) {
-    return enqueueGeminiRequest(() => geminiGenerateContentInner(prompt, model, signal));
-}
-
-async function geminiGenerateContentInner(prompt, model, signal = null) {
-    throwIfAborted(signal);
-    const token = await getGeminiAccessTokenWithRecovery(signal);
-
-    const projectId = await getGeminiProjectId(token, signal);
-    const endpoint = `${CODE_ASSIST_ENDPOINT}:generateContent`;
-
-    const MAX_RETRIES = 3;
-    let lastError = null;
-
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        throwIfAborted(signal);
-        let response = await fetch(endpoint, {
-            method: 'POST',
-            signal,
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model,
-                project: projectId,
-                request: buildGeminiGenerateRequest(prompt, true),
-            }),
-        });
-
-        // Rate limit → wait and retry (capped at MAX_RETRY_WAIT_MS)
-        if (response.status === 429) {
-            const errorBody = await response.text();
-            const waitMs = resolveGeminiRetryWaitMs(response, errorBody, attempt);
-            console.warn(`[gemini] Rate limited (429), waiting ${waitMs}ms before retry ${attempt + 1}/${MAX_RETRIES}`);
-            await sleepWithSignal(waitMs, signal);
-            continue;
-        }
-
-        if (!response.ok) {
-            const errorBody = await response.text();
-            if (isGeminiThinkingConfigError(response.status, errorBody)) {
-                console.warn('[gemini] thinking disable config not supported for this request, retrying without it');
-                response = await fetch(endpoint, {
-                    method: 'POST',
-                    signal,
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model,
-                        project: projectId,
-                        request: buildGeminiGenerateRequest(prompt, false),
-                    }),
-                });
-
-                if (response.status === 429) {
-                    const retryErrorBody = await response.text();
-                    const waitMs = resolveGeminiRetryWaitMs(response, retryErrorBody, attempt);
-                    console.warn(`[gemini] Rate limited (429) on fallback, waiting ${waitMs}ms`);
-                    await sleepWithSignal(waitMs, signal);
-                    continue;
-                }
-
-                if (!response.ok) {
-                    const fallbackErrorBody = await response.text();
-                    lastError = new Error(`Gemini API error ${response.status}: ${fallbackErrorBody}`);
-                    continue;
-                }
-            } else {
-                lastError = new Error(`Gemini API error ${response.status}: ${errorBody}`);
-                continue;
-            }
-        }
-
-        const data = await response.json();
-        const text = data.response?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) {
-            throw new Error('No text in Gemini response');
-        }
-        return text;
-    }
-
-    throwIfAborted(signal);
-    throw lastError || new Error('Gemini API: max retries exceeded');
 }
 
 function buildGeminiCliArgs(prompt, model, defaultModel) {
@@ -1191,10 +543,6 @@ const CLI_TOOLS = {
 async function checkToolAvailable(toolId) {
     const tool = CLI_TOOLS[toolId];
     if (!tool) return { available: false, error: 'Unknown tool' };
-
-    if (tool.mode === 'sdk' && tool.checkAvailable) {
-        return await tool.checkAvailable();
-    }
 
     try {
         const commandPath = resolveCommandPath(tool.command);
@@ -1489,10 +837,9 @@ async function getModelsForTool(toolId, forceRefresh = false) {
  */
 const MAX_CONCURRENT_CLI = 5;
 let activeCLIProcesses = 0;
-let activeSDKProcesses = 0;
 
 function getActiveRequestCount() {
-    return activeCLIProcesses + activeSDKProcesses;
+    return activeCLIProcesses;
 }
 
 /**
@@ -1613,63 +960,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
 }
 
 /**
- * SDK 도구 실행
- */
-async function runSDK(toolId, prompt, model = '', timeout = 120000, signal = null) {
-    const tool = CLI_TOOLS[toolId];
-    if (!tool) {
-        throw new Error(`Unknown tool: ${toolId}`);
-    }
-
-    const actualModel = model || tool.defaultModel || 'default';
-    const promptPreview = prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt;
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`[${toolId}] SDK REQUEST`);
-    console.log(`  Model: ${actualModel}`);
-    console.log(`  Prompt: "${promptPreview}"`);
-    console.log(`${'='.repeat(60)}`);
-
-    activeSDKProcesses++;
-    let timeoutTriggered = false;
-    const sdkController = new AbortController();
-    let timeoutId = null;
-    let onAbort = null;
-
-    try {
-        if (signal?.aborted) {
-            throw new Error('Request aborted by client');
-        }
-
-        if (signal) {
-            onAbort = () => sdkController.abort();
-            signal.addEventListener('abort', onAbort, { once: true });
-        }
-
-        timeoutId = setTimeout(() => {
-            timeoutTriggered = true;
-            sdkController.abort();
-        }, timeout);
-
-        const result = await tool.generate(prompt, model || tool.defaultModel, sdkController.signal);
-        console.log(`[${toolId}] SUCCESS - Response length: ${result.length} chars`);
-        return result;
-    } catch (e) {
-        if (timeoutTriggered) {
-            throw new Error(`Timeout after ${timeout}ms`);
-        }
-        if (signal?.aborted || isAbortLikeError(e)) {
-            throw new Error('Request aborted by client');
-        }
-        throw e;
-    } finally {
-        activeSDKProcesses--;
-        if (timeoutId) clearTimeout(timeoutId);
-        if (signal && onAbort) signal.removeEventListener('abort', onAbort);
-    }
-}
-
-/**
- * 통합 실행 함수 (mode에 따라 CLI 또는 SDK 선택)
+ * 통합 실행 함수
  */
 async function runTool(toolId, prompt, model = '', timeout = 120000, signal = null) {
     const tool = CLI_TOOLS[toolId];
@@ -1677,11 +968,7 @@ async function runTool(toolId, prompt, model = '', timeout = 120000, signal = nu
         throw new Error(`Unknown tool: ${toolId}`);
     }
 
-    if (tool.mode === 'sdk') {
-        return await runSDK(toolId, prompt, model, timeout, signal);
-    } else {
-        return await runCLI(toolId, prompt, model, timeout, signal);
-    }
+    return await runCLI(toolId, prompt, model, timeout, signal);
 }
 
 // ============================================
@@ -1835,28 +1122,6 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     });
 }
 
-/**
- * SDK 도구 SSE 스트리밍 (SDK는 스트리밍 미지원 → 단일 chunk)
- */
-async function runSDKStream(toolId, prompt, model, timeout, res) {
-    const ac = new AbortController();
-    const onClose = () => ac.abort();
-    res.on('close', onClose);
-    try {
-        const result = await runSDK(toolId, prompt, model, timeout, ac.signal);
-        sendSSEChunk(res, result);
-        sendSSEDone(res);
-    } catch (e) {
-        sendSSEError(res, e.message);
-        sendSSEDone(res);
-    } finally {
-        res.off('close', onClose);
-    }
-}
-
-/**
- * 통합 스트리밍 디스패처
- */
 function runToolStream(toolId, prompt, model, timeout, res) {
     const tool = CLI_TOOLS[toolId];
     if (!tool) {
@@ -1864,12 +1129,7 @@ function runToolStream(toolId, prompt, model, timeout, res) {
         sendSSEDone(res);
         return;
     }
-
-    if (tool.mode === 'sdk') {
-        runSDKStream(toolId, prompt, model, timeout, res);
-    } else {
-        runCLIStream(toolId, prompt, model, timeout, res);
-    }
+    runCLIStream(toolId, prompt, model, timeout, res);
 }
 
 // ============================================
@@ -2299,7 +1559,7 @@ app.listen(PORT, '127.0.0.1', () => {
             const tool = CLI_TOOLS[toolId];
             const status = await checkToolAvailable(toolId);
             const icon = status.available ? '✓' : '✗';
-            const modeTag = tool.mode === 'sdk' ? '[SDK]' : '[CLI]';
+            const modeTag = '[CLI]';
             console.log(`   ${icon} ${toolId} ${modeTag}: ${status.available ? 'available' : status.error} (default: ${tool.defaultModel || 'auto'})`);
         })
     ).then(() => {

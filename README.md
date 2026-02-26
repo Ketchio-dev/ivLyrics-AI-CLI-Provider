@@ -68,7 +68,7 @@ npm.cmd start
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.1.2
+🚀 ivLyrics CLI Proxy Server v2.1.3
    Running on http://localhost:19284
 ```
 
