@@ -3,15 +3,13 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.4
+ * @version 2.0.5
  */
 
 (() => {
     'use strict';
 
     const DEFAULT_PROXY_URL = 'http://localhost:19284';
-    const MODEL_HINT = 'Pick a preset model, or choose Custom Model ID.';
-    const CUSTOM_MODEL_OPTION = '__custom__';
     const ADDON_UPDATE_CHECK_TTL = 3600000;
     const MAX_REGISTER_RETRIES = 100;
     const GEMINI_MODEL_ALIAS_MAP = Object.freeze({
@@ -388,8 +386,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
     // ============================================
 
     function createAddon(config) {
-        const { id, name, description, toolId, fallbackModels, safeDefaultModel, isBlockedModel, useCopyrightNotice, customModelPlaceholder } = config;
-        const fallbackModelIds = fallbackModels.map(m => m.id);
+        const { id, name, description, toolId, fallbackModels, safeDefaultModel, isBlockedModel, useCopyrightNotice } = config;
         const LOG_TAG = `[${name}]`;
 
         const ADDON_INFO = {
@@ -397,7 +394,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.4',
+            version: '2.0.5',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -420,9 +417,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         }
 
         function getSelectedModel() {
-            const selected = sanitizeModel(getSetting('model', ''), '');
-            if (toolId !== 'gemini') return selected;
-            return normalizeGeminiModelId(selected);
+            // Manual model selection is intentionally disabled.
+            // We always let the proxy choose and expose the resolved model in settings.
+            return '';
         }
 
         async function checkProxyHealth() {
@@ -458,13 +455,16 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         if (!modelMap.has(m.id)) modelMap.set(m.id, m);
                     });
                 const models = Array.from(modelMap.values());
+                const rawDefault = sanitizeModel((data?.defaultModel || '').toString().trim(), safeDefaultModel);
+                const defaultModel = toolId === 'gemini' ? (normalizeGeminiModelId(rawDefault) || rawDefault) : rawDefault;
                 return {
                     models: models.length > 0 ? models : fallbackModels,
-                    defaultModel: sanitizeModel((data?.defaultModel || '').toString().trim(), safeDefaultModel)
+                    defaultModel,
+                    source: (data?.source || '').toString().trim()
                 };
             } catch (e) {
                 console.warn(`${LOG_TAG} Failed to fetch models from proxy:`, e.message);
-                return { models: fallbackModels, defaultModel: safeDefaultModel };
+                return { models: fallbackModels, defaultModel: safeDefaultModel, source: 'fallback' };
             }
         }
 
@@ -657,6 +657,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
             async init() {
                 console.log(`${LOG_TAG} Initialized (v${ADDON_INFO.version})`);
+                setSetting('model', '');
+                setSetting('custom-model', '');
                 checkAddonUpdate(id, getProxyUrl()).catch(() => {});
             },
 
@@ -675,16 +677,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 const addonRef = addon;
 
                 return function CLIProviderSettings() {
-                    const initialModel = sanitizeModel(getSetting('model', ''), '');
-                    const initialCustomMode = !!initialModel && !fallbackModelIds.includes(initialModel);
                     const [proxyUrl, setProxyUrl] = useState(getSetting('proxy-url', DEFAULT_PROXY_URL));
-                    const [selectedModel, setSelectedModel] = useState(initialModel);
-                    const [customModel, setCustomModel] = useState(
-                        initialCustomMode ? initialModel : sanitizeModel(getSetting('custom-model', ''), '')
-                    );
-                    const [isCustomModelMode, setIsCustomModelMode] = useState(initialCustomMode);
-                    const [availableModels, setAvailableModels] = useState(fallbackModels);
-                    const [proxyDefaultModel, setProxyDefaultModel] = useState('');
+                    const [resolvedModel, setResolvedModel] = useState('');
+                    const [resolvedSource, setResolvedSource] = useState('');
                     const [modelsLoading, setModelsLoading] = useState(false);
                     const [testStatus, setTestStatus] = useState('');
                     const [updateStatus, setUpdateStatus] = useState('');
@@ -694,8 +689,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         setModelsLoading(true);
                         try {
                             const result = await fetchAvailableModels(proxyUrl);
-                            setAvailableModels(result.models.length > 0 ? result.models : fallbackModels);
-                            setProxyDefaultModel(result.defaultModel);
+                            setResolvedModel((result.defaultModel || '').toString().trim());
+                            setResolvedSource((result.source || '').toString().trim());
                         } finally {
                             setModelsLoading(false);
                         }
@@ -703,44 +698,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                     useEffect(() => { loadModels(); }, [loadModels]);
 
-                    useEffect(() => {
-                        if (selectedModel && isCustomModelMode && availableModels.some(m => m.id === selectedModel)) {
-                            setIsCustomModelMode(false);
-                        }
-                    }, [availableModels, selectedModel, isCustomModelMode]);
-
                     const handleProxyUrlChange = useCallback((e) => {
                         const value = e.target.value;
                         setProxyUrl(value);
                         setSetting('proxy-url', value);
-                    }, []);
-
-                    const handleModelChange = useCallback((e) => {
-                        const value = e.target.value;
-                        const availableModelIds = availableModels.map(m => m.id);
-                        if (value === CUSTOM_MODEL_OPTION) {
-                            const customValue = sanitizeModel(
-                                customModel || (selectedModel && !availableModelIds.includes(selectedModel) ? selectedModel : ''),
-                                ''
-                            );
-                            setIsCustomModelMode(true);
-                            setCustomModel(customValue);
-                            setSelectedModel(customValue);
-                            setSetting('custom-model', customValue);
-                            setSetting('model', customValue);
-                            return;
-                        }
-                        setIsCustomModelMode(false);
-                        setSelectedModel(value);
-                        setSetting('model', value);
-                    }, [availableModels, customModel, selectedModel]);
-
-                    const handleCustomModelChange = useCallback((e) => {
-                        const value = sanitizeModel(e.target.value, '');
-                        setCustomModel(value);
-                        setSelectedModel(value);
-                        setSetting('custom-model', value);
-                        setSetting('model', value);
                     }, []);
 
                     const handleTest = useCallback(async () => {
@@ -860,37 +821,27 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         ),
 
                         React.createElement('div', { className: 'ai-addon-setting' },
-                            React.createElement('label', null, 'Model'),
+                            React.createElement('label', null, 'Responding Model (Auto)'),
                             React.createElement('div', { className: 'ai-addon-input-group' },
-                                React.createElement('select', {
-                                    value: isCustomModelMode ? CUSTOM_MODEL_OPTION : selectedModel,
-                                    onChange: handleModelChange,
-                                    disabled: modelsLoading
-                                },
-                                    React.createElement('option', { value: '' }, proxyDefaultModel ? `Default (${proxyDefaultModel})` : 'Default (CLI default)'),
-                                    availableModels.map(m =>
-                                        React.createElement('option', { key: m.id, value: m.id }, m.name)
-                                    ),
-                                    React.createElement('option', { value: CUSTOM_MODEL_OPTION }, 'Custom Model ID')
-                                ),
+                                React.createElement('input', {
+                                    type: 'text',
+                                    value: resolvedModel || 'default',
+                                    readOnly: true
+                                }),
                                 React.createElement('button', {
                                     onClick: loadModels,
                                     className: 'ai-addon-btn-secondary',
                                     disabled: modelsLoading,
-                                    title: 'Refresh model list'
+                                    title: 'Refresh resolved model'
                                 }, modelsLoading ? '...' : '↻')
                             ),
-                            React.createElement('small', null, `${MODEL_HINT} (${availableModels.length} models loaded)`)
-                        ),
-                        isCustomModelMode && React.createElement('div', { className: 'ai-addon-setting' },
-                            React.createElement('label', null, 'Custom Model ID'),
-                            React.createElement('input', {
-                                type: 'text',
-                                value: customModel,
-                                onChange: handleCustomModelChange,
-                                placeholder: customModelPlaceholder
-                            }),
-                            React.createElement('small', null, 'Leave empty to use the CLI default model')
+                            React.createElement(
+                                'small',
+                                null,
+                                resolvedSource
+                                    ? `Manual model input is disabled. Proxy reports this model (source: ${resolvedSource}).`
+                                    : 'Manual model input is disabled. Proxy automatically selects the responding model.'
+                            )
                         ),
 
                         React.createElement('div', { className: 'ai-addon-setting' },
