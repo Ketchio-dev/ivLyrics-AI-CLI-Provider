@@ -96,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.1.3';
+const LOCAL_VERSION = '2.1.4';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -1316,6 +1316,89 @@ app.get('/updates', async (req, res) => {
     }
 });
 
+function isSafeProxyDir(dirPath) {
+    const resolved = path.resolve(dirPath || '');
+    return path.basename(resolved).toLowerCase() === 'cli-proxy';
+}
+
+function scheduleDirectoryRemoval(dirPath) {
+    const resolved = path.resolve(dirPath);
+    if (process.platform === 'win32') {
+        const escaped = resolved.replace(/"/g, '""');
+        const command = `ping 127.0.0.1 -n 4 > nul && rmdir /s /q "${escaped}"`;
+        const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+            env: { ...process.env },
+        });
+        child.unref();
+        return;
+    }
+
+    const escaped = resolved.replace(/'/g, `'\\''`);
+    const command = `sleep 2; rm -rf '${escaped}'`;
+    const child = spawn('/bin/sh', ['-c', command], {
+        detached: true,
+        stdio: 'ignore',
+        env: { ...process.env },
+    });
+    child.unref();
+}
+
+/**
+ * 프록시 자체 정리(삭제)
+ * - 마켓플레이스에서 애드온 제거 시 호출되는 용도
+ */
+app.post('/cleanup', async (req, res) => {
+    if (isShuttingDown) {
+        return res.status(409).json({ error: 'Server is shutting down' });
+    }
+
+    const { target, confirm, dryRun } = req.body || {};
+    if (target !== 'proxy') {
+        return res.status(400).json({ error: 'Missing/invalid target (expected: proxy)' });
+    }
+    if (confirm !== 'REMOVE_PROXY') {
+        return res.status(400).json({ error: 'Missing confirmation token' });
+    }
+
+    const proxyDir = path.resolve(__dirname);
+    if (!isSafeProxyDir(proxyDir)) {
+        return res.status(500).json({ error: `Unsafe proxy dir: ${proxyDir}` });
+    }
+
+    const strategy = process.platform === 'win32' ? 'cmd-rmdir-delayed' : 'sh-rmrf-delayed';
+    if (dryRun === true) {
+        return res.json({
+            success: true,
+            dryRun: true,
+            target: 'proxy',
+            proxyDir,
+            strategy
+        });
+    }
+
+    isShuttingDown = true;
+    res.json({
+        success: true,
+        target: 'proxy',
+        proxyDir,
+        strategy,
+        note: 'Cleanup scheduled. Server will exit shortly.'
+    });
+
+    setTimeout(() => {
+        try {
+            scheduleDirectoryRemoval(proxyDir);
+        } catch (e) {
+            console.error('[cleanup] Failed to schedule proxy removal:', e.message);
+        } finally {
+            setTimeout(() => process.exit(0), 250);
+        }
+    }, 100);
+});
+
 /**
  * 파일 업데이트 실행
  */
@@ -1550,6 +1633,7 @@ app.listen(PORT, '127.0.0.1', () => {
     console.log(`   GET  /models   - List available models per tool`);
     console.log(`   POST /generate - Generate text (supports ?stream=true for SSE)`);
     console.log(`   GET  /updates  - Check for available updates`);
+    console.log(`   POST /cleanup  - Remove proxy directory and exit`);
     console.log(`   POST /update   - Download and apply updates`);
     console.log(`   POST /v1/chat/completions - OpenAI-compatible endpoint`);
     console.log(`\n🔧 Checking available tools...`);

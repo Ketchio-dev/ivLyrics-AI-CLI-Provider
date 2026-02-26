@@ -68,7 +68,7 @@ npm.cmd start
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.1.3
+🚀 ivLyrics CLI Proxy Server v2.1.4
    Running on http://localhost:19284
 ```
 
@@ -76,6 +76,7 @@ Then open Spotify and enable the provider in ivLyrics settings.
 
 The command above auto-installs `cli-proxy` on first run (Addon Store install case).
 When the addon loads, it also auto-checks proxy updates and applies proxy-only updates in the background (cooldown: 15 minutes).
+When removed from Addon Marketplace, the addon also requests proxy self-cleanup (`/cleanup`) if the proxy is currently running.
 
 ## Gemini mode
 

@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.8
+ * @version 2.0.9
  */
 
 (() => {
@@ -414,6 +414,45 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
         bridgeState.mappings[MARKETPLACE_ADDON_ID] = Array.from(new Set(providerIds || []));
 
+        const resolveCleanupProxyUrl = (mappedIds) => {
+            if (!Array.isArray(mappedIds) || mappedIds.length === 0 || typeof manager.getAddonSetting !== 'function') {
+                return DEFAULT_PROXY_URL;
+            }
+
+            for (const mappedId of mappedIds) {
+                try {
+                    const value = manager.getAddonSetting(mappedId, 'proxy-url', DEFAULT_PROXY_URL);
+                    if (typeof value === 'string' && /^https?:\/\/[^/\s]+/i.test(value.trim())) {
+                        return value.trim();
+                    }
+                } catch {
+                    // ignore and try next mapped addon
+                }
+            }
+
+            return DEFAULT_PROXY_URL;
+        };
+
+        const requestProxyCleanup = async (proxyUrl) => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            try {
+                await fetch(`${proxyUrl}/cleanup`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target: 'proxy',
+                        confirm: 'REMOVE_PROXY'
+                    }),
+                    signal: controller.signal
+                });
+            } catch (e) {
+                console.warn('[CLI Provider] Proxy cleanup request failed:', e?.message || e);
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        };
+
         if (!bridgeState.patched) {
             bridgeState.originalUnregister = manager.unregister.bind(manager);
             manager.unregister = function unregisterWithMarketplaceBridge(addonId) {
@@ -446,6 +485,11 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     console.warn('[CLI Provider] Failed to cleanup provider order:', e?.message || e);
                 }
 
+                if (addonId === MARKETPLACE_ADDON_ID) {
+                    const proxyUrl = resolveCleanupProxyUrl(mappedIds);
+                    requestProxyCleanup(proxyUrl).catch(() => { });
+                }
+
                 return !!baseRemoved || mappedRemoved;
             };
             bridgeState.patched = true;
@@ -467,7 +511,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.8',
+            version: '2.0.9',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
