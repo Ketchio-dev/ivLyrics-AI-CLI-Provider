@@ -4,7 +4,7 @@
  *
  * Claude: CLI spawn 방식 유지 (API 키 없이 SDK 전환 불가)
  * Codex:  CLI spawn 방식 유지 (OAuth 토큰 교환 절차가 독점적)
- * Gemini: 기본 CLI spawn (IVLYRICS_GEMINI_MODE=sdk로 SDK(Code Assist API) 전환 가능)
+ * Gemini: CLI spawn 방식 고정
  *
  * 사용법:
  *   npm install
@@ -98,7 +98,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.1.1';
+const LOCAL_VERSION = '2.1.2';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -269,17 +269,10 @@ function isAbortLikeError(error) {
 }
 
 // ============================================
-// Gemini SDK (Code Assist API)
+// Gemini model normalization
 // ============================================
 
-// Gemini OAuth client values are loaded from ~/.gemini/oauth_creds.json.
-const CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com/v1internal';
-const GEMINI_REASONING_OFF_CONFIG = Object.freeze({ thinkingConfig: { thinkingBudget: 0 } });
 const GEMINI_DEFAULT_MODEL = 'gemini-2.5-flash';
-const GEMINI_RUNTIME_MODE = String(
-    process.env.IVLYRICS_GEMINI_MODE || process.env.GEMINI_MODE || 'cli'
-).trim().toLowerCase();
-const GEMINI_USE_CLI_SPAWN = GEMINI_RUNTIME_MODE === 'cli' || GEMINI_RUNTIME_MODE === 'spawn';
 const GEMINI_MODEL_ALIAS_MAP = Object.freeze({
     '3.0-flash': 'gemini-3-flash-preview',
     '3-flash': 'gemini-3-flash-preview',
@@ -1150,45 +1143,14 @@ const CLI_TOOLS = {
         parseOutput: (stdout) => stdout.trim()
     },
 
-    // Gemini - SDK(Code Assist API) or CLI spawn (runtime toggle)
+    // Gemini - CLI spawn only
     gemini: {
-        mode: GEMINI_USE_CLI_SPAWN ? 'cli' : 'sdk',
+        mode: 'cli',
         command: 'gemini',
-        checkCommand: GEMINI_USE_CLI_SPAWN ? 'gemini --version' : null,
+        checkCommand: 'gemini --version',
         defaultModel: GEMINI_DEFAULT_MODEL,
-        buildArgs: GEMINI_USE_CLI_SPAWN
-            ? (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel)
-            : null,
-        parseOutput: GEMINI_USE_CLI_SPAWN
-            ? (stdout) => stdout.trim()
-            : null,
-        generate: async (prompt, model, signal) => {
-            const useModel = resolveGeminiModel(model, GEMINI_DEFAULT_MODEL);
-            return await geminiGenerateContent(prompt, useModel, signal);
-        },
-        checkAvailable: async () => {
-            if (GEMINI_USE_CLI_SPAWN) {
-                return { available: true };
-            }
-            try {
-                const { creds } = readGeminiCredsFile();
-                const { clientId, clientSecret } = resolveGeminiOAuthClient(creds);
-                if (!hasGeminiOAuthClientConfig(clientId, clientSecret)) {
-                    return {
-                        available: false,
-                        error:
-                            'Gemini OAuth client config could not be resolved. ' +
-                            'Check gemini CLI installation and re-authenticate with `gemini`.'
-                    };
-                }
-                if (!geminiAuth) {
-                    geminiAuth = initGeminiAuth();
-                }
-                return { available: true };
-            } catch (e) {
-                return { available: false, error: e.message };
-            }
-        }
+        buildArgs: (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel),
+        parseOutput: (stdout) => stdout.trim()
     },
 
     // OpenAI Codex - CLI spawn (OAuth 토큰 교환 절차가 독점적)
@@ -2321,7 +2283,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n🚀 ivLyrics CLI Proxy Server v${LOCAL_VERSION}`);
     console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
-    console.log(`   Gemini mode: ${GEMINI_USE_CLI_SPAWN ? 'CLI spawn' : 'SDK (Code Assist API)'}`);
+    console.log(`   Gemini mode: CLI spawn`);
     console.log(`\n📋 Available endpoints:`);
     console.log(`   GET  /health   - Check server status and available tools`);
     console.log(`   GET  /tools    - List available CLI tools`);

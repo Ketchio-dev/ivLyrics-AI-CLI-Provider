@@ -1,6 +1,6 @@
 {
   "name": "ivlyrics-cli-proxy",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Local proxy server for CLI AI tools (Claude Code, Codex CLI, Gemini CLI)",
   "main": "server.js",
   "scripts": {

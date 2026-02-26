@@ -68,7 +68,7 @@ npm.cmd start
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.1.1
+🚀 ivLyrics CLI Proxy Server v2.1.2
    Running on http://localhost:19284
 ```
 
@@ -78,12 +78,7 @@ The command above auto-installs `cli-proxy` on first run (Addon Store install ca
 
 ## Gemini mode
 
-Gemini runs in CLI spawn mode by default.
-
-- Default: `IVLYRICS_GEMINI_MODE=cli`
-- Optional SDK mode: `IVLYRICS_GEMINI_MODE=sdk`
-
-SDK mode needs `~/.gemini/oauth_creds.json` from Gemini CLI login.
+Gemini is fixed to CLI spawn mode.
 
 
 ## License
