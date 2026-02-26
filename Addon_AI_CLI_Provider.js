@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.7
+ * @version 2.0.8
  */
 
 (() => {
@@ -11,6 +11,9 @@
 
     const DEFAULT_PROXY_URL = 'http://localhost:19284';
     const ADDON_UPDATE_CHECK_TTL = 3600000;
+    const AUTO_PROXY_UPDATE_COOLDOWN_MS = 15 * 60 * 1000;
+    const AUTO_PROXY_UPDATE_STATE_KEY = '__ivLyricsCliProviderAutoProxyUpdateState';
+    const AUTO_PROXY_UPDATE_LAST_TS_KEY = 'ivlyrics-cli-provider:auto-proxy-update-last-ts';
     const MAX_REGISTER_RETRIES = 100;
     const GEMINI_MODEL_ALIAS_MAP = Object.freeze({
         '3.0-flash': 'gemini-3-flash-preview',
@@ -226,6 +229,30 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
     const updateCheckCaches = {};
 
+    function getAutoProxyUpdateState() {
+        if (!window[AUTO_PROXY_UPDATE_STATE_KEY]) {
+            window[AUTO_PROXY_UPDATE_STATE_KEY] = { inFlight: null };
+        }
+        return window[AUTO_PROXY_UPDATE_STATE_KEY];
+    }
+
+    function readAutoProxyUpdateLastTs() {
+        try {
+            const value = Number(window.localStorage?.getItem(AUTO_PROXY_UPDATE_LAST_TS_KEY) || '0');
+            return Number.isFinite(value) && value > 0 ? value : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    function writeAutoProxyUpdateLastTs(ts) {
+        try {
+            window.localStorage?.setItem(AUTO_PROXY_UPDATE_LAST_TS_KEY, String(ts));
+        } catch {
+            // ignore storage failures
+        }
+    }
+
     async function checkAddonUpdate(addonId, proxyUrl, force = false) {
         if (!updateCheckCaches[addonId]) updateCheckCaches[addonId] = { data: null, ts: 0 };
         const cache = updateCheckCaches[addonId];
@@ -247,6 +274,52 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         } catch {
             return null;
         }
+    }
+
+    async function maybeAutoUpdateProxy(addonId, proxyUrl) {
+        const state = getAutoProxyUpdateState();
+        if (state.inFlight) return state.inFlight;
+
+        const now = Date.now();
+        const lastTs = readAutoProxyUpdateLastTs();
+        if (lastTs && (now - lastTs) < AUTO_PROXY_UPDATE_COOLDOWN_MS) {
+            return null;
+        }
+
+        state.inFlight = (async () => {
+            try {
+                const updateInfo = await checkAddonUpdate(addonId, proxyUrl, true);
+                if (!updateInfo?.proxy?.updateAvailable) {
+                    writeAutoProxyUpdateLastTs(Date.now());
+                    return null;
+                }
+
+                const response = await fetch(`${proxyUrl}/update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target: 'proxy' })
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${response.status}`);
+                }
+                await response.json().catch(() => ({}));
+                writeAutoProxyUpdateLastTs(Date.now());
+
+                const current = updateInfo?.proxy?.current || '?';
+                const latest = updateInfo?.proxy?.latest || '?';
+                console.log(`[CLI Provider] Proxy auto-updated: ${current} -> ${latest}`);
+                Spicetify.showNotification?.(`CLI proxy updated (${current} -> ${latest}). It will restart automatically.`);
+                return true;
+            } catch (e) {
+                console.warn('[CLI Provider] Auto proxy update skipped:', e?.message || e);
+                return null;
+            } finally {
+                state.inFlight = null;
+            }
+        })();
+
+        return state.inFlight;
     }
 
     // ============================================
@@ -394,7 +467,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.7',
+            version: '2.0.8',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -657,7 +730,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
             async init() {
                 console.log(`${LOG_TAG} Initialized (v${ADDON_INFO.version})`);
-                checkAddonUpdate(id, getProxyUrl()).catch(() => {});
+                const proxyUrl = getProxyUrl();
+                checkAddonUpdate(id, proxyUrl).catch(() => {});
+                maybeAutoUpdateProxy(id, proxyUrl).catch(() => {});
             },
 
             async testConnection() {

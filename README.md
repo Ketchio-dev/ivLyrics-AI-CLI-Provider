@@ -75,6 +75,7 @@ Expected output:
 Then open Spotify and enable the provider in ivLyrics settings.
 
 The command above auto-installs `cli-proxy` on first run (Addon Store install case).
+When the addon loads, it also auto-checks proxy updates and applies proxy-only updates in the background (cooldown: 15 minutes).
 
 ## Gemini mode
 
