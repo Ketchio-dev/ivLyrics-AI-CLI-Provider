@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.6
+ * @version 2.0.7
  */
 
 (() => {
@@ -394,7 +394,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.6',
+            version: '2.0.7',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -789,8 +789,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                     const isWindows = /Windows/i.test(navigator.userAgent || '');
                     const setupCommand = isWindows
-                        ? '$cfg=$null; if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg=(spicetify -c 2>$null | Select-Object -First 1) }; $dirs=@(); if ($cfg) { $dirs += (Split-Path $cfg -Parent) }; $dirs += "$env:APPDATA\\spicetify","$env:USERPROFILE\\.config\\spicetify","$env:USERPROFILE\\.spicetify"; $proxyDir=($dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { Test-Path $_ } | Select-Object -First 1); if (!$proxyDir) { & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy; $proxyDir=($dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { Test-Path $_ } | Select-Object -First 1) }; if (!$proxyDir) { Write-Host "cli-proxy install failed." -ForegroundColor Red; exit 1 }; Set-Location $proxyDir; if (!(Test-Path (Join-Path $proxyDir "node_modules"))) { npm.cmd install }; npm.cmd start'
-                        : 'cfg="$(spicetify -c 2>/dev/null || true)"; base="${cfg%/*}"; [ -n "$base" ] || base="$HOME/.config/spicetify"; proxy="$base/cli-proxy"; if [ ! -d "$proxy" ]; then curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy; fi; [ -d "$proxy" ] || proxy="$HOME/.config/spicetify/cli-proxy"; cd "$proxy" || exit 1; [ -d node_modules ] || npm install; npm start';
+                        ? '$cfg=$null; if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg=(spicetify -c 2>$null | Select-Object -First 1) }; $dirs=@(); if ($cfg) { $dirs += (Split-Path $cfg -Parent) }; $dirs += "$env:APPDATA\\spicetify","$env:USERPROFILE\\.config\\spicetify","$env:USERPROFILE\\.spicetify"; $proxyDir=($dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { (Test-Path (Join-Path $_ "package.json")) -and (Test-Path (Join-Path $_ "server.js")) } | Select-Object -First 1); if (!$proxyDir) { & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy; $proxyDir=($dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { (Test-Path (Join-Path $_ "package.json")) -and (Test-Path (Join-Path $_ "server.js")) } | Select-Object -First 1) }; if (!$proxyDir) { Write-Host "cli-proxy install failed." -ForegroundColor Red; exit 1 }; Set-Location $proxyDir; if (!(Test-Path (Join-Path $proxyDir "node_modules"))) { npm.cmd install }; npm.cmd start'
+                        : 'cfg="$(spicetify -c 2>/dev/null || true)"; base="${cfg%/*}"; proxy=""; for d in "$base" "$HOME/.config/spicetify" "$HOME/.spicetify"; do [ -n "$d" ] || continue; p="$d/cli-proxy"; if [ -f "$p/package.json" ] && [ -f "$p/server.js" ]; then proxy="$p"; break; fi; done; if [ -z "$proxy" ]; then curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy; for d in "$base" "$HOME/.config/spicetify" "$HOME/.spicetify"; do [ -n "$d" ] || continue; p="$d/cli-proxy"; if [ -f "$p/package.json" ] && [ -f "$p/server.js" ]; then proxy="$p"; break; fi; done; fi; [ -n "$proxy" ] || { echo "cli-proxy install failed."; exit 1; }; cd "$proxy" || exit 1; [ -d node_modules ] || npm install; npm start';
 
                     const handleCopyCommand = useCallback(async () => {
                         try {

@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 
 ```bash
 # macOS / Linux
-cfg="$(spicetify -c 2>/dev/null || true)"; base="${cfg%/*}"; [ -n "$base" ] || base="$HOME/.config/spicetify"; proxy="$base/cli-proxy"; if [ ! -d "$proxy" ]; then curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy; fi; [ -d "$proxy" ] || proxy="$HOME/.config/spicetify/cli-proxy"; cd "$proxy" || exit 1; [ -d node_modules ] || npm install; npm start
+cfg="$(spicetify -c 2>/dev/null || true)"; base="${cfg%/*}"; proxy=""; for d in "$base" "$HOME/.config/spicetify" "$HOME/.spicetify"; do [ -n "$d" ] || continue; p="$d/cli-proxy"; if [ -f "$p/package.json" ] && [ -f "$p/server.js" ]; then proxy="$p"; break; fi; done; if [ -z "$proxy" ]; then curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy; for d in "$base" "$HOME/.config/spicetify" "$HOME/.spicetify"; do [ -n "$d" ] || continue; p="$d/cli-proxy"; if [ -f "$p/package.json" ] && [ -f "$p/server.js" ]; then proxy="$p"; break; fi; done; fi; [ -n "$proxy" ] || { echo "cli-proxy install failed."; exit 1; }; cd "$proxy" || exit 1; [ -d node_modules ] || npm install; npm start
 
 # Windows PowerShell
 $cfg = $null
@@ -54,10 +54,10 @@ if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg = (spicetify -c 
 $dirs = @()
 if ($cfg) { $dirs += (Split-Path $cfg -Parent) }
 $dirs += "$env:APPDATA\spicetify", "$env:USERPROFILE\.config\spicetify", "$env:USERPROFILE\.spicetify"
-$proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+$proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { (Test-Path (Join-Path $_ "package.json")) -and (Test-Path (Join-Path $_ "server.js")) } | Select-Object -First 1
 if (!$proxyDir) {
   & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy
-  $proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+  $proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { (Test-Path (Join-Path $_ "package.json")) -and (Test-Path (Join-Path $_ "server.js")) } | Select-Object -First 1
 }
 if (!$proxyDir) { Write-Host "cli-proxy install failed." -ForegroundColor Red; exit 1 }
 Set-Location $proxyDir
