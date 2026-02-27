@@ -60,6 +60,7 @@ function Resolve-SpicetifyConfig {
     } catch {}
 
     $candidates += @(
+        (Join-Path $env:LOCALAPPDATA "spicetify"),
         (Join-Path $env:APPDATA "spicetify"),
         (Join-Path $env:USERPROFILE ".config\spicetify"),
         (Join-Path $env:USERPROFILE ".spicetify")
@@ -73,11 +74,21 @@ function Resolve-SpicetifyConfig {
     }
 
     foreach ($path in $unique) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        if (Test-Path -LiteralPath (Join-Path $path "CustomApps\ivLyrics")) {
+            return $path
+        }
+    }
+
+    foreach ($path in $unique) {
         if (Test-Path -LiteralPath $path) {
             return $path
         }
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return (Join-Path $env:LOCALAPPDATA "spicetify")
+    }
     return (Join-Path $env:APPDATA "spicetify")
 }
 

@@ -96,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.2.4';
+const LOCAL_VERSION = '2.2.5';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -129,15 +129,25 @@ function getSpicetifyConfigDir() {
         return path.join(os.homedir(), '.config', 'spicetify');
     }
 
+    const winLocalAppDataDir = process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'spicetify')
+        : '';
     const winAppDataDir = process.env.APPDATA
         ? path.join(process.env.APPDATA, 'spicetify')
         : '';
     const winUserConfigDir = path.join(os.homedir(), '.config', 'spicetify');
-    const candidates = [winAppDataDir, winUserConfigDir].filter(Boolean);
+    const winDotSpicetifyDir = path.join(os.homedir(), '.spicetify');
+    const candidates = [winLocalAppDataDir, winAppDataDir, winUserConfigDir, winDotSpicetifyDir].filter(Boolean);
+
+    for (const candidate of candidates) {
+        const ivLyricsPath = path.join(candidate, 'CustomApps', 'ivLyrics');
+        if (fs.existsSync(ivLyricsPath)) return candidate;
+    }
+
     for (const candidate of candidates) {
         if (fs.existsSync(candidate)) return candidate;
     }
-    return candidates[0] || winUserConfigDir;
+    return winLocalAppDataDir || winAppDataDir || winUserConfigDir;
 }
 
 function getSpicetifyAddonDir() {

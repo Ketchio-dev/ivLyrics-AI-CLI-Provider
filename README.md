@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.2.4
+🚀 ivLyrics CLI Proxy Server v2.2.5
    Running on http://localhost:19284
 ```
 
@@ -76,6 +76,9 @@ Marketplace note:
 Addon Marketplace install downloads only the addon file. You still need to run the start command once.
 When the addon loads, it also auto-checks proxy updates and applies proxy-only updates in the background (cooldown: 15 minutes).
 When removed from Addon Marketplace, the addon also requests proxy self-cleanup (`/cleanup`) if the proxy is currently running.
+
+Windows path note:
+- Common locations checked automatically: `%LocalAppData%\spicetify`, `%AppData%\spicetify`, `%UserProfile%\.config\spicetify`, `%UserProfile%\.spicetify`
 
 ## Gemini mode
 

@@ -32,6 +32,7 @@ function Get-SpicetifyConfigCandidates {
     } catch {}
 
     $candidates += @(
+        (Join-Path $env:LOCALAPPDATA 'spicetify'),
         (Join-Path $env:APPDATA 'spicetify'),
         (Join-Path $env:USERPROFILE '.config\spicetify'),
         (Join-Path $env:USERPROFILE '.spicetify')
