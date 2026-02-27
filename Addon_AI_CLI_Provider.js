@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.2.1
+ * @version 2.2.2
  */
 
 (() => {
@@ -533,7 +533,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.2.1',
+            version: '2.2.2',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -983,7 +983,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     lineHeight: 1.45
                                 }
                             },
-                                React.createElement('div', null, 'Marketplace install adds only the addon file. Run the command once to install/start cli-proxy.'),
+                                React.createElement('div', null, 'Marketplace install adds only the addon file. Run the command once to install/update/start cli-proxy.'),
                                 React.createElement('div', null, 'Marketplace remove cleans cli-proxy only when proxy is running at removal time.'),
                                 React.createElement('div', null, 'If proxy folder remains, run uninstall script with -Proxy or --proxy.')
                             )

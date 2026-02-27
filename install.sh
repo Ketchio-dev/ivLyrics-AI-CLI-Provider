@@ -256,6 +256,41 @@ proxy_ready() {
     [ -f "$CLI_PROXY_DIR/package.json" ] && [ -f "$CLI_PROXY_DIR/server.js" ]
 }
 
+read_local_proxy_version() {
+    local package_path="$CLI_PROXY_DIR/package.json"
+    [ -f "$package_path" ] || return 0
+    awk '
+        /"version"[[:space:]]*:[[:space:]]*"/ {
+            s = $0
+            sub(/.*"version"[[:space:]]*:[[:space:]]*"/, "", s)
+            sub(/".*$/, "", s)
+            print s
+            exit
+        }
+    ' "$package_path"
+}
+
+read_remote_proxy_version() {
+    local tmp
+    tmp=$(mktemp)
+    if ! curl -fsSL "$REPO_BASE/version.json" -o "$tmp"; then
+        rm -f "$tmp"
+        return 0
+    fi
+    awk '
+        /"proxy"[[:space:]]*:/ { in_proxy = 1; next }
+        in_proxy && /"version"[[:space:]]*:[[:space:]]*"/ {
+            s = $0
+            sub(/.*"version"[[:space:]]*:[[:space:]]*"/, "", s)
+            sub(/".*$/, "", s)
+            print s
+            exit
+        }
+        in_proxy && /}/ { in_proxy = 0 }
+    ' "$tmp"
+    rm -f "$tmp"
+}
+
 ensure_proxy_ready() {
     if ! proxy_ready; then
         info "cli-proxy not found. Installing..."
@@ -265,6 +300,16 @@ ensure_proxy_ready() {
 
     if [ "$NO_NPM_INSTALL" -eq 1 ]; then
         warn "Skipped npm install (--no-npm-install)."
+        return
+    fi
+
+    local local_ver
+    local remote_ver
+    local_ver=$(read_local_proxy_version)
+    remote_ver=$(read_remote_proxy_version)
+    if [ -n "$local_ver" ] && [ -n "$remote_ver" ] && [ "$local_ver" != "$remote_ver" ]; then
+        info "Updating cli-proxy ($local_ver -> $remote_ver) ..."
+        install_proxy
         return
     fi
 

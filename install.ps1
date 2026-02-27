@@ -197,6 +197,32 @@ function Resolve-NpmCommand {
     return Get-Command npm -ErrorAction SilentlyContinue
 }
 
+function Get-LocalProxyVersion {
+    try {
+        $pkgPath = Join-Path $CliProxyDir "package.json"
+        if (-not (Test-Path -LiteralPath $pkgPath)) {
+            return $null
+        }
+        $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json
+        if ($pkg.version) {
+            return $pkg.version.ToString().Trim()
+        }
+    } catch {}
+    return $null
+}
+
+function Get-RemoteProxyVersion {
+    try {
+        $versionUrl = "$RepoBase/version.json"
+        $raw = Invoke-WebRequest -UseBasicParsing -Uri $versionUrl
+        $obj = $raw.Content | ConvertFrom-Json
+        if ($obj.proxy.version) {
+            return $obj.proxy.version.ToString().Trim()
+        }
+    } catch {}
+    return $null
+}
+
 function Install-Proxy {
     Write-Info "Installing proxy to $CliProxyDir"
     Ensure-Dir $CliProxyDir
@@ -244,6 +270,14 @@ function Ensure-ProxyReady {
 
     if ($NoNpmInstall) {
         Write-Warn "Skipped npm install (-NoNpmInstall)"
+        return
+    }
+
+    $localVersion = Get-LocalProxyVersion
+    $remoteVersion = Get-RemoteProxyVersion
+    if ($localVersion -and $remoteVersion -and ($localVersion -ne $remoteVersion)) {
+        Write-Info "Updating cli-proxy ($localVersion -> $remoteVersion) ..."
+        Install-Proxy
         return
     }
 
