@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.2.3
+ * @version 2.2.4
  */
 
 (() => {
@@ -533,7 +533,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.2.3',
+            version: '2.2.4',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -822,9 +822,32 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     const [resolvedModel, setResolvedModel] = useState('');
                     const [resolvedSource, setResolvedSource] = useState('');
                     const [modelsLoading, setModelsLoading] = useState(false);
+                    const [proxyStatus, setProxyStatus] = useState({ state: 'checking', message: 'Checking proxy status...' });
                     const [testStatus, setTestStatus] = useState('');
                     const [updateStatus, setUpdateStatus] = useState('');
                     const [hasUpdates, setHasUpdates] = useState(false);
+
+                    const refreshProxyStatus = useCallback(async () => {
+                        setProxyStatus({ state: 'checking', message: 'Checking proxy status...' });
+                        try {
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 4000);
+                            const response = await fetch(`${proxyUrl}/health`, { signal: controller.signal });
+                            clearTimeout(timeoutId);
+                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                            const health = await response.json();
+                            const version = (health?.version || 'unknown').toString();
+                            const toolHealth = health?.tools?.[toolId];
+                            if (toolHealth?.available) {
+                                setProxyStatus({ state: 'running', message: `Running (proxy v${version})` });
+                            } else {
+                                const detail = toolHealth?.error ? `: ${toolHealth.error}` : '';
+                                setProxyStatus({ state: 'error', message: `Proxy running but ${toolId} unavailable${detail}` });
+                            }
+                        } catch {
+                            setProxyStatus({ state: 'error', message: `Not running at ${proxyUrl}. Run setup command and keep terminal open.` });
+                        }
+                    }, [proxyUrl]);
 
                     const loadModels = useCallback(async () => {
                         setModelsLoading(true);
@@ -859,6 +882,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     }, [proxyUrl]);
 
                     useEffect(() => { loadModels(); }, [loadModels]);
+                    useEffect(() => { refreshProxyStatus(); }, [refreshProxyStatus]);
 
                     const handleProxyUrlChange = useCallback((e) => {
                         const value = e.target.value;
@@ -880,8 +904,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             setTestStatus('✓ Connection successful!');
                         } catch (e) {
                             setTestStatus(`✗ ${e.message}`);
+                        } finally {
+                            refreshProxyStatus().catch(() => { });
                         }
-                    }, []);
+                    }, [refreshProxyStatus]);
 
                     const handleCheckUpdate = useCallback(async () => {
                         setUpdateStatus('Checking...');
@@ -992,13 +1018,23 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                         React.createElement('div', { className: 'ai-addon-setting' },
                             React.createElement('label', null, 'Proxy Server URL'),
-                            React.createElement('input', {
-                                type: 'text',
-                                value: proxyUrl,
-                                onChange: handleProxyUrlChange,
-                                placeholder: DEFAULT_PROXY_URL
-                            }),
-                            React.createElement('small', null, 'Default: http://localhost:19284')
+                            React.createElement('div', { className: 'ai-addon-input-group' },
+                                React.createElement('input', {
+                                    type: 'text',
+                                    value: proxyUrl,
+                                    onChange: handleProxyUrlChange,
+                                    placeholder: DEFAULT_PROXY_URL
+                                }),
+                                React.createElement('button', {
+                                    onClick: refreshProxyStatus,
+                                    className: 'ai-addon-btn-secondary',
+                                    title: 'Check proxy status'
+                                }, 'Check')
+                            ),
+                            React.createElement('small', null, 'Default: http://localhost:19284'),
+                            React.createElement('small', {
+                                className: `ai-addon-test-status ${proxyStatus.state === 'running' ? 'success' : proxyStatus.state === 'error' ? 'error' : ''}`
+                            }, `Status: ${proxyStatus.message}`)
                         ),
 
                         React.createElement('div', { className: 'ai-addon-setting' },

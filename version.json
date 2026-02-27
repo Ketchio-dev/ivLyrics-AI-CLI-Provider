@@ -1,8 +1,8 @@
 {
     "schemaVersion": 1,
-    "proxy": { "version": "2.2.3" },
+    "proxy": { "version": "2.2.4" },
     "addons": {
-        "Addon_AI_CLI_Provider.js": { "version": "2.2.3", "id": "cli-claude" },
+        "Addon_AI_CLI_Provider.js": { "version": "2.2.4", "id": "cli-claude" },
         "Addon_AI_CLI_ClaudeCode.js": { "version": "1.1.0", "id": "cli-claude" },
         "Addon_AI_CLI_CodexCLI.js": { "version": "1.1.0", "id": "cli-codex" },
         "Addon_AI_CLI_GeminiCLI.js": { "version": "1.1.0", "id": "cli-gemini" }
