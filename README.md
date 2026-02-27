@@ -53,13 +53,27 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.2.2
+🚀 ivLyrics CLI Proxy Server v2.2.3
    Running on http://localhost:19284
 ```
 
 Then open Spotify and enable the provider in ivLyrics settings.
 
 The command above auto-installs or updates `cli-proxy` and starts it immediately.
+Keep that terminal window open while using ivLyrics (proxy must stay running).
+If you close it, run the same command again to restart proxy.
+
+Quick health check:
+```bash
+# macOS / Linux
+curl -fsSL http://127.0.0.1:19284/health
+
+# Windows PowerShell
+Invoke-RestMethod http://127.0.0.1:19284/health
+```
+
+Marketplace note:
+Addon Marketplace install downloads only the addon file. You still need to run the start command once.
 When the addon loads, it also auto-checks proxy updates and applies proxy-only updates in the background (cooldown: 15 minutes).
 When removed from Addon Marketplace, the addon also requests proxy self-cleanup (`/cleanup`) if the proxy is currently running.
 

@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.2.2
+ * @version 2.2.3
  */
 
 (() => {
@@ -533,7 +533,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.2.2',
+            version: '2.2.3',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -953,7 +953,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                 fontSize: '12px'
                             }
                         },
-                            React.createElement('strong', null, 'Setup Required (one-time):'),
+                            React.createElement('strong', null, 'Setup / Start Proxy:'),
                             React.createElement('div', {
                                 style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }
                             },
@@ -983,6 +983,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     lineHeight: 1.45
                                 }
                             },
+                                React.createElement('div', null, 'Run the command in a terminal. Keep that terminal open while using ivLyrics (proxy must stay running).'),
                                 React.createElement('div', null, 'Marketplace install adds only the addon file. Run the command once to install/update/start cli-proxy.'),
                                 React.createElement('div', null, 'Marketplace remove cleans cli-proxy only when proxy is running at removal time.'),
                                 React.createElement('div', null, 'If proxy folder remains, run uninstall script with -Proxy or --proxy.')
@@ -1027,7 +1028,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     ? (resolvedSource
                                         ? `Select a CLI-discovered model (source: ${resolvedSource}, proxy default: ${resolvedModel || 'n/a'}).`
                                         : `Select a CLI-discovered model (proxy default: ${resolvedModel || 'n/a'}).`)
-                                    : 'No discovered models yet. Start proxy and click refresh.'
+                                    : 'No discovered models yet. Proxy may not be running. Run setup command, keep terminal open, then click refresh.'
                             )
                         ),
 
