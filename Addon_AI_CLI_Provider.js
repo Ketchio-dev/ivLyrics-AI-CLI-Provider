@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.10
+ * @version 2.0.11
  */
 
 (() => {
@@ -409,7 +409,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         const bridgeState = window[BRIDGE_STATE_KEY] || {
             patched: false,
             originalUnregister: null,
-            mappings: {}
+            mappings: {},
+            cleanupRequested: false
         };
 
         bridgeState.mappings[MARKETPLACE_ADDON_ID] = Array.from(new Set(providerIds || []));
@@ -434,20 +435,41 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         };
 
         const requestProxyCleanup = async (proxyUrl) => {
+            if (bridgeState.cleanupRequested) {
+                return;
+            }
+            bridgeState.cleanupRequested = true;
+
+            const cleanupUrl = `${proxyUrl}/cleanup`;
+            const payload = JSON.stringify({
+                target: 'proxy',
+                confirm: 'REMOVE_PROXY'
+            });
+
+            if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+                try {
+                    const blob = new Blob([payload], { type: 'application/json' });
+                    if (navigator.sendBeacon(cleanupUrl, blob)) {
+                        return;
+                    }
+                } catch {
+                    // fallback to fetch
+                }
+            }
+
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 2000);
             try {
-                await fetch(`${proxyUrl}/cleanup`, {
+                await fetch(cleanupUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        target: 'proxy',
-                        confirm: 'REMOVE_PROXY'
-                    }),
-                    signal: controller.signal
+                    body: payload,
+                    signal: controller.signal,
+                    keepalive: true
                 });
             } catch (e) {
                 console.warn('[CLI Provider] Proxy cleanup request failed:', e?.message || e);
+                bridgeState.cleanupRequested = false;
             } finally {
                 clearTimeout(timeoutId);
             }
@@ -511,7 +533,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.10',
+            version: '2.0.11',
             supports: { translate: true, metadata: true, tmi: true }
         };
 

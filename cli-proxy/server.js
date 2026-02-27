@@ -96,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.1.4';
+const LOCAL_VERSION = '2.1.5';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -1350,12 +1350,21 @@ function scheduleDirectoryRemoval(dirPath) {
  * 프록시 자체 정리(삭제)
  * - 마켓플레이스에서 애드온 제거 시 호출되는 용도
  */
-app.post('/cleanup', async (req, res) => {
+app.post('/cleanup', express.text({ type: 'text/plain', limit: '64kb' }), async (req, res) => {
     if (isShuttingDown) {
         return res.status(409).json({ error: 'Server is shutting down' });
     }
 
-    const { target, confirm, dryRun } = req.body || {};
+    let payload = req.body;
+    if (typeof payload === 'string') {
+        try {
+            payload = JSON.parse(payload);
+        } catch {
+            payload = {};
+        }
+    }
+
+    const { target, confirm, dryRun } = payload || {};
     if (target !== 'proxy') {
         return res.status(400).json({ error: 'Missing/invalid target (expected: proxy)' });
     }

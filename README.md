@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.1.4
+🚀 ivLyrics CLI Proxy Server v2.1.5
    Running on http://localhost:19284
 ```
 
