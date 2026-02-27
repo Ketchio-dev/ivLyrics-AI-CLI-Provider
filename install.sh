@@ -5,12 +5,12 @@
 set -euo pipefail
 
 REPO_BASE="https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main"
-SPICETIFY_CONFIG="$HOME/.config/spicetify"
-IVLYRICS_APP="$SPICETIFY_CONFIG/CustomApps/ivLyrics"
-IVLYRICS_DATA="$SPICETIFY_CONFIG/ivLyrics"
-MANIFEST="$IVLYRICS_APP/manifest.json"
-ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
-CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
+SPICETIFY_CONFIG=""
+IVLYRICS_APP=""
+IVLYRICS_DATA=""
+MANIFEST=""
+ADDON_SOURCES=""
+CLI_PROXY_DIR=""
 
 ADDONS="Addon_AI_CLI_Provider.js"
 ADDON_LABELS="AI CLI Provider (Claude + Gemini + Codex)"
@@ -27,6 +27,54 @@ warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$1"; }
 err()   { printf '\033[1;31m[ERROR]\033[0m %s\n' "$1" >&2; }
 
 # ── pre-flight checks ───────────────────────────────────────────────────────
+
+resolve_spicetify_config() {
+    local cfg=""
+    local from_cmd=""
+
+    if command -v spicetify >/dev/null 2>&1; then
+        cfg=$(spicetify -c 2>/dev/null || true)
+        if [ -n "$cfg" ]; then
+            from_cmd=$(dirname "$cfg")
+        fi
+    fi
+
+    local candidates=""
+    if [ -n "$from_cmd" ]; then
+        candidates="$from_cmd"
+    fi
+    candidates="$candidates
+$HOME/.config/spicetify
+$HOME/.spicetify"
+
+    local d
+    local IFS_BAK="$IFS"
+    IFS=$'\n'
+    for d in $candidates; do
+        [ -n "$d" ] || continue
+        if [ -d "$d" ]; then
+            IFS="$IFS_BAK"
+            printf '%s\n' "$d"
+            return 0
+        fi
+    done
+    IFS="$IFS_BAK"
+
+    if [ -n "$from_cmd" ]; then
+        printf '%s\n' "$from_cmd"
+    else
+        printf '%s\n' "$HOME/.config/spicetify"
+    fi
+}
+
+refresh_paths() {
+    SPICETIFY_CONFIG=$(resolve_spicetify_config)
+    IVLYRICS_APP="$SPICETIFY_CONFIG/CustomApps/ivLyrics"
+    IVLYRICS_DATA="$SPICETIFY_CONFIG/ivLyrics"
+    MANIFEST="$IVLYRICS_APP/manifest.json"
+    ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
+    CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
+}
 
 preflight() {
     if ! command -v curl >/dev/null 2>&1; then
@@ -333,6 +381,8 @@ install_all() {
 
 main() {
     preflight
+    refresh_paths
+    info "Using Spicetify config: $SPICETIFY_CONFIG"
     local arg_count="$#"
     local install_addons_flag=0
     local install_proxy_flag=0
@@ -404,7 +454,7 @@ $1"
             done
             IFS="$IFS_BAK"
         fi
-        if [ "$install_addons_flag" -eq 0 ] && [ "$install_proxy_flag" -eq 0 ] && [ -z "$custom_urls" ]; then
+        if [ "$install_addons_flag" -eq 0 ] && [ "$install_proxy_flag" -eq 0 ] && [ "$start_proxy_flag" -eq 0 ] && [ -z "$custom_urls" ]; then
             show_menu
         fi
     fi

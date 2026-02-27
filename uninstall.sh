@@ -4,20 +4,68 @@
 
 set -euo pipefail
 
-SPICETIFY_CONFIG="$HOME/.config/spicetify"
-IVLYRICS_APP="$SPICETIFY_CONFIG/CustomApps/ivLyrics"
-IVLYRICS_DATA="$SPICETIFY_CONFIG/ivLyrics"
-MANIFEST="$IVLYRICS_APP/manifest.json"
-ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
-CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
+SPICETIFY_CONFIG=""
+IVLYRICS_APP=""
+IVLYRICS_DATA=""
+MANIFEST=""
+ADDON_SOURCES=""
+CLI_PROXY_DIR=""
 
-ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
+ADDONS="Addon_AI_CLI_Provider.js Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
 
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$1"; }
 ok()    { printf '\033[1;32m[OK]\033[0m    %s\n' "$1"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$1"; }
 
 HAS_SPICETIFY=0
+
+resolve_spicetify_config() {
+    local cfg=""
+    local from_cmd=""
+
+    if command -v spicetify >/dev/null 2>&1; then
+        cfg=$(spicetify -c 2>/dev/null || true)
+        if [ -n "$cfg" ]; then
+            from_cmd=$(dirname "$cfg")
+        fi
+    fi
+
+    local candidates=""
+    if [ -n "$from_cmd" ]; then
+        candidates="$from_cmd"
+    fi
+    candidates="$candidates
+$HOME/.config/spicetify
+$HOME/.spicetify"
+
+    local d
+    local IFS_BAK="$IFS"
+    IFS=$'\n'
+    for d in $candidates; do
+        [ -n "$d" ] || continue
+        if [ -d "$d" ]; then
+            IFS="$IFS_BAK"
+            printf '%s\n' "$d"
+            return 0
+        fi
+    done
+    IFS="$IFS_BAK"
+
+    if [ -n "$from_cmd" ]; then
+        printf '%s\n' "$from_cmd"
+    else
+        printf '%s\n' "$HOME/.config/spicetify"
+    fi
+}
+
+refresh_paths() {
+    SPICETIFY_CONFIG=$(resolve_spicetify_config)
+    IVLYRICS_APP="$SPICETIFY_CONFIG/CustomApps/ivLyrics"
+    IVLYRICS_DATA="$SPICETIFY_CONFIG/ivLyrics"
+    MANIFEST="$IVLYRICS_APP/manifest.json"
+    ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
+    CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
+}
 
 preflight() {
     if command -v spicetify >/dev/null 2>&1; then
@@ -140,6 +188,8 @@ show_menu() {
 
 main() {
     preflight
+    refresh_paths
+    info "Using Spicetify config: $SPICETIFY_CONFIG"
 
     local arg_count="$#"
     local remove_addons_flag=0
