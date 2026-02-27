@@ -89,23 +89,72 @@ function Resolve-IvLyricsAppDir([string]$DefaultRoot) {
     return (Join-Path $DefaultRoot "CustomApps\ivLyrics")
 }
 
-function Resolve-ProxyDir([string]$DefaultRoot, [string]$IvLyricsRoot) {
-    $roots = @($DefaultRoot, $IvLyricsRoot) + (Get-SpicetifyConfigCandidates)
-    $unique = @()
+function Get-ProxyDirs([string]$PrimaryRoot) {
+    $roots = @($PrimaryRoot) + (Get-SpicetifyConfigCandidates)
+    $uniqueRoots = @()
     foreach ($r in $roots) {
-        if (-not [string]::IsNullOrWhiteSpace($r) -and -not ($unique -contains $r)) {
-            $unique += $r
+        if (-not [string]::IsNullOrWhiteSpace($r) -and -not ($uniqueRoots -contains $r)) {
+            $uniqueRoots += $r
         }
     }
 
-    foreach ($r in $unique) {
+    $dirs = @()
+    foreach ($r in $uniqueRoots) {
         $candidate = Join-Path $r "cli-proxy"
-        if (Test-Path -LiteralPath (Join-Path $candidate "server.js")) {
-            return $candidate
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        if (-not ($dirs -contains $candidate)) {
+            $dirs += $candidate
         }
     }
 
-    return (Join-Path $DefaultRoot "cli-proxy")
+    if ($dirs.Count -eq 0) {
+        return @(Join-Path $PrimaryRoot "cli-proxy")
+    }
+    return $dirs
+}
+
+function Stop-ProxyProcessesForDir([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) { return }
+
+    $dirNorm = [System.IO.Path]::GetFullPath($DirPath).TrimEnd('\').ToLowerInvariant()
+    $stopped = 0
+
+    try {
+        $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $cmd = $_.CommandLine
+            if ([string]::IsNullOrWhiteSpace($cmd)) { return $false }
+            $cmdNorm = $cmd.ToLowerInvariant()
+            return $cmdNorm.Contains($dirNorm) -and ($cmdNorm.Contains("server.js") -or $cmdNorm.Contains("npm start") -or $cmdNorm.Contains("cli-proxy"))
+        }
+        foreach ($p in $procs) {
+            try {
+                Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+                $stopped++
+            } catch {}
+        }
+    } catch {}
+
+    if ($stopped -gt 0) {
+        Write-Info "Stopped $stopped proxy process(es) for: $DirPath"
+        Start-Sleep -Milliseconds 700
+    }
+}
+
+function Remove-ProxyDirSafe([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) {
+        Write-Info "Proxy directory not found, skipping: $DirPath"
+        return
+    }
+
+    Stop-ProxyProcessesForDir -DirPath $DirPath
+
+    try {
+        Remove-Item -LiteralPath $DirPath -Recurse -Force
+        Write-Ok "Deleted proxy directory: $DirPath"
+    } catch {
+        Write-Warn "Failed to delete proxy directory: $DirPath"
+        Write-Warn $_.Exception.Message
+    }
 }
 
 $SpicetifyConfig = Resolve-SpicetifyConfig
@@ -118,10 +167,12 @@ if ([string]::IsNullOrWhiteSpace($IvLyricsRoot)) {
 $IvLyricsData = Join-Path $IvLyricsRoot "ivLyrics"
 $Manifest = Join-Path $IvLyricsApp "manifest.json"
 $AddonSources = Join-Path $IvLyricsData "addon_sources.json"
-$CliProxyDir = Resolve-ProxyDir -DefaultRoot $SpicetifyConfig -IvLyricsRoot $IvLyricsRoot
+$CliProxyDir = Join-Path $IvLyricsRoot "cli-proxy"
+$CliProxyDirs = Get-ProxyDirs -PrimaryRoot $IvLyricsRoot
 
 Write-Info "Resolved ivLyrics app: $IvLyricsApp"
 Write-Info "Resolved proxy dir: $CliProxyDir"
+Write-Info ("Discovered proxy dirs: " + ($CliProxyDirs -join ", "))
 
 $AddonsList = @(
     "Addon_AI_CLI_Provider.js",
@@ -216,11 +267,8 @@ if ($Addons) {
 }
 
 if ($Proxy) {
-    if (Test-Path -LiteralPath $CliProxyDir) {
-        Remove-Item -LiteralPath $CliProxyDir -Recurse -Force
-        Write-Ok "Deleted proxy directory: $CliProxyDir"
-    } else {
-        Write-Info "Proxy directory not found, skipping: $CliProxyDir"
+    foreach ($proxyDir in $CliProxyDirs) {
+        Remove-ProxyDirSafe -DirPath $proxyDir
     }
 }
 

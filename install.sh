@@ -7,6 +7,7 @@ set -euo pipefail
 REPO_BASE="https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main"
 SPICETIFY_CONFIG=""
 IVLYRICS_APP=""
+IVLYRICS_ROOT=""
 IVLYRICS_DATA=""
 MANIFEST=""
 ADDON_SOURCES=""
@@ -28,7 +29,7 @@ err()   { printf '\033[1;31m[ERROR]\033[0m %s\n' "$1" >&2; }
 
 # ── pre-flight checks ───────────────────────────────────────────────────────
 
-resolve_spicetify_config() {
+get_spicetify_candidates() {
     local cfg=""
     local from_cmd=""
 
@@ -48,8 +49,40 @@ $HOME/.config/spicetify
 $HOME/.spicetify"
 
     local d
+    local seen=""
     local IFS_BAK="$IFS"
     IFS=$'\n'
+    for d in $candidates; do
+        [ -n "$d" ] || continue
+        case "$seen" in
+            *"|$d|"*) continue ;;
+        esac
+        seen="${seen}|${d}|"
+        printf '%s\n' "$d"
+    done
+    IFS="$IFS_BAK"
+}
+
+resolve_spicetify_config() {
+    local candidates
+    candidates=$(get_spicetify_candidates)
+
+    local first=""
+    local d
+    local IFS_BAK="$IFS"
+    IFS=$'\n'
+    for d in $candidates; do
+        [ -n "$d" ] || continue
+        if [ -z "$first" ]; then
+            first="$d"
+        fi
+        if [ -d "$d/CustomApps/ivLyrics" ]; then
+            IFS="$IFS_BAK"
+            printf '%s\n' "$d"
+            return 0
+        fi
+    done
+
     for d in $candidates; do
         [ -n "$d" ] || continue
         if [ -d "$d" ]; then
@@ -60,20 +93,48 @@ $HOME/.spicetify"
     done
     IFS="$IFS_BAK"
 
-    if [ -n "$from_cmd" ]; then
-        printf '%s\n' "$from_cmd"
+    if [ -n "$first" ]; then
+        printf '%s\n' "$first"
     else
         printf '%s\n' "$HOME/.config/spicetify"
     fi
 }
 
+resolve_ivlyrics_app_dir() {
+    local default_root="$1"
+    local candidates
+    candidates=$(get_spicetify_candidates)
+
+    local d
+    local IFS_BAK="$IFS"
+    IFS=$'\n'
+    for d in $candidates; do
+        [ -n "$d" ] || continue
+        if [ -f "$d/CustomApps/ivLyrics/manifest.json" ]; then
+            IFS="$IFS_BAK"
+            printf '%s\n' "$d/CustomApps/ivLyrics"
+            return 0
+        fi
+        if [ -d "$d/CustomApps/ivLyrics" ]; then
+            IFS="$IFS_BAK"
+            printf '%s\n' "$d/CustomApps/ivLyrics"
+            return 0
+        fi
+    done
+    IFS="$IFS_BAK"
+
+    printf '%s\n' "$default_root/CustomApps/ivLyrics"
+}
+
 refresh_paths() {
     SPICETIFY_CONFIG=$(resolve_spicetify_config)
-    IVLYRICS_APP="$SPICETIFY_CONFIG/CustomApps/ivLyrics"
-    IVLYRICS_DATA="$SPICETIFY_CONFIG/ivLyrics"
+    IVLYRICS_APP=$(resolve_ivlyrics_app_dir "$SPICETIFY_CONFIG")
+    IVLYRICS_ROOT=$(dirname "$(dirname "$IVLYRICS_APP")")
+    [ -n "$IVLYRICS_ROOT" ] || IVLYRICS_ROOT="$SPICETIFY_CONFIG"
+    IVLYRICS_DATA="$IVLYRICS_ROOT/ivLyrics"
     MANIFEST="$IVLYRICS_APP/manifest.json"
     ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
-    CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
+    CLI_PROXY_DIR="$IVLYRICS_ROOT/cli-proxy"
 }
 
 preflight() {
@@ -428,6 +489,8 @@ main() {
     preflight
     refresh_paths
     info "Using Spicetify config: $SPICETIFY_CONFIG"
+    info "Resolved ivLyrics app: $IVLYRICS_APP"
+    info "Resolved proxy dir: $CLI_PROXY_DIR"
     local arg_count="$#"
     local install_addons_flag=0
     local install_proxy_flag=0

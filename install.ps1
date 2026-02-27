@@ -113,25 +113,6 @@ function Resolve-IvLyricsAppDir([string]$DefaultRoot) {
     return (Join-Path $DefaultRoot "CustomApps\ivLyrics")
 }
 
-function Resolve-ProxyDir([string]$DefaultRoot, [string]$IvLyricsRoot) {
-    $roots = @($DefaultRoot, $IvLyricsRoot) + (Get-SpicetifyConfigCandidates)
-    $unique = @()
-    foreach ($r in $roots) {
-        if (-not [string]::IsNullOrWhiteSpace($r) -and -not ($unique -contains $r)) {
-            $unique += $r
-        }
-    }
-
-    foreach ($r in $unique) {
-        $candidate = Join-Path $r "cli-proxy"
-        if (Test-Path -LiteralPath (Join-Path $candidate "server.js")) {
-            return $candidate
-        }
-    }
-
-    return (Join-Path $DefaultRoot "cli-proxy")
-}
-
 $SpicetifyConfig = Resolve-SpicetifyConfig
 Write-Info "Using Spicetify config: $SpicetifyConfig"
 
@@ -143,7 +124,7 @@ if ([string]::IsNullOrWhiteSpace($IvLyricsRoot)) {
 $IvLyricsData = Join-Path $IvLyricsRoot "ivLyrics"
 $Manifest = Join-Path $IvLyricsApp "manifest.json"
 $AddonSources = Join-Path $IvLyricsData "addon_sources.json"
-$CliProxyDir = Resolve-ProxyDir -DefaultRoot $SpicetifyConfig -IvLyricsRoot $IvLyricsRoot
+$CliProxyDir = Join-Path $IvLyricsRoot "cli-proxy"
 
 Write-Info "Resolved ivLyrics app: $IvLyricsApp"
 Write-Info "Resolved proxy dir: $CliProxyDir"

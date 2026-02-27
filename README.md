@@ -79,6 +79,7 @@ When removed from Addon Marketplace, the addon also requests proxy self-cleanup 
 
 Windows path note:
 - Common locations checked automatically: `%LocalAppData%\spicetify`, `%AppData%\spicetify`, `%UserProfile%\.config\spicetify`, `%UserProfile%\.spicetify`
+- Addon is installed to `.../CustomApps/ivLyrics`, and proxy is installed to `.../cli-proxy` in the same detected Spicetify root.
 
 ## Gemini mode
 
