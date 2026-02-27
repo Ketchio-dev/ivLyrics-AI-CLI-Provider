@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.2.0
+ * @version 2.2.1
  */
 
 (() => {
@@ -533,7 +533,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.2.0',
+            version: '2.2.1',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -953,7 +953,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                 fontSize: '12px'
                             }
                         },
-                            React.createElement('strong', null, 'Setup Required:'),
+                            React.createElement('strong', null, 'Setup Required (one-time):'),
                             React.createElement('div', {
                                 style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }
                             },
@@ -975,6 +975,17 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     style: { padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' },
                                     title: 'Copy command'
                                 }, '📋 Copy')
+                            ),
+                            React.createElement('div', {
+                                style: {
+                                    marginTop: '8px',
+                                    opacity: 0.9,
+                                    lineHeight: 1.45
+                                }
+                            },
+                                React.createElement('div', null, 'Marketplace install adds only the addon file. Run the command once to install/start cli-proxy.'),
+                                React.createElement('div', null, 'Marketplace remove cleans cli-proxy only when proxy is running at removal time.'),
+                                React.createElement('div', null, 'If proxy folder remains, run uninstall script with -Proxy or --proxy.')
                             )
                         ),
 
