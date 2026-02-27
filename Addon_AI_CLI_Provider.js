@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.0.11
+ * @version 2.2.0
  */
 
 (() => {
@@ -533,7 +533,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description,
-            version: '2.0.11',
+            version: '2.2.0',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
