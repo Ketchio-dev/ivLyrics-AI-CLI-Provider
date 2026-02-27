@@ -113,6 +113,30 @@ function Get-ProxyDirs([string]$PrimaryRoot) {
     return $dirs
 }
 
+function Get-IvLyricsAppDirs([string]$PrimaryRoot) {
+    $roots = @($PrimaryRoot) + (Get-SpicetifyConfigCandidates)
+    $uniqueRoots = @()
+    foreach ($r in $roots) {
+        if (-not [string]::IsNullOrWhiteSpace($r) -and -not ($uniqueRoots -contains $r)) {
+            $uniqueRoots += $r
+        }
+    }
+
+    $dirs = @()
+    foreach ($r in $uniqueRoots) {
+        $candidate = Join-Path $r "CustomApps\ivLyrics"
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        if (-not ($dirs -contains $candidate)) {
+            $dirs += $candidate
+        }
+    }
+
+    if ($dirs.Count -eq 0) {
+        return @(Join-Path $PrimaryRoot "CustomApps\ivLyrics")
+    }
+    return $dirs
+}
+
 function Stop-ProxyProcessesForDir([string]$DirPath) {
     if (-not (Test-Path -LiteralPath $DirPath)) { return }
 
@@ -168,10 +192,12 @@ $IvLyricsData = Join-Path $IvLyricsRoot "ivLyrics"
 $Manifest = Join-Path $IvLyricsApp "manifest.json"
 $AddonSources = Join-Path $IvLyricsData "addon_sources.json"
 $CliProxyDir = Join-Path $IvLyricsRoot "cli-proxy"
+$IvLyricsApps = Get-IvLyricsAppDirs -PrimaryRoot $IvLyricsRoot
 $CliProxyDirs = Get-ProxyDirs -PrimaryRoot $IvLyricsRoot
 
 Write-Info "Resolved ivLyrics app: $IvLyricsApp"
 Write-Info "Resolved proxy dir: $CliProxyDir"
+Write-Info ("Discovered ivLyrics app dirs: " + ($IvLyricsApps -join ", "))
 Write-Info ("Discovered proxy dirs: " + ($CliProxyDirs -join ", "))
 
 $AddonsList = @(
@@ -213,26 +239,26 @@ function Write-JsonMap([string]$Path, [hashtable]$Map) {
     (($Map | ConvertTo-Json -Depth 20) + "`n") | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
-function Remove-AddonSource([string]$Filename) {
-    if (-not (Test-Path -LiteralPath $AddonSources)) {
+function Remove-AddonSourceAt([string]$SourcesPath, [string]$Filename) {
+    if (-not (Test-Path -LiteralPath $SourcesPath)) {
         return
     }
-    $sources = Read-JsonMap -Path $AddonSources
+    $sources = Read-JsonMap -Path $SourcesPath
     if ($sources.ContainsKey($Filename)) {
         $sources.Remove($Filename)
-        Write-JsonMap -Path $AddonSources -Map $sources
-        Write-Ok "Removed source entry: $Filename"
+        Write-JsonMap -Path $SourcesPath -Map $sources
+        Write-Ok "Removed source entry: $Filename ($SourcesPath)"
     }
 }
 
-function Remove-ManifestEntry([string]$Entry) {
-    if (-not (Test-Path -LiteralPath $Manifest)) {
+function Remove-ManifestEntryAt([string]$ManifestPath, [string]$Entry) {
+    if (-not (Test-Path -LiteralPath $ManifestPath)) {
         return
     }
     try {
-        $manifestObj = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+        $manifestObj = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     } catch {
-        Write-Warn "Failed to parse manifest.json, skipping entry removal: $Entry"
+        Write-Warn "Failed to parse manifest.json, skipping entry removal: $Entry ($ManifestPath)"
         return
     }
     if ($null -eq $manifestObj.subfiles_extension) {
@@ -244,25 +270,35 @@ function Remove-ManifestEntry([string]$Entry) {
         return
     }
     $manifestObj.subfiles_extension = $filtered
-    (($manifestObj | ConvertTo-Json -Depth 100) + "`n") | Set-Content -LiteralPath $Manifest -Encoding UTF8
-    Write-Ok "Removed manifest entry: $Entry"
+    (($manifestObj | ConvertTo-Json -Depth 100) + "`n") | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+    Write-Ok "Removed manifest entry: $Entry ($ManifestPath)"
 }
 
-function Remove-Addon([string]$Filename) {
-    $path = Join-Path $IvLyricsApp $Filename
+function Remove-AddonFromApp([string]$AppDir, [string]$Filename) {
+    $path = Join-Path $AppDir $Filename
     if (Test-Path -LiteralPath $path) {
         Remove-Item -LiteralPath $path -Force
         Write-Ok "Deleted addon file: $path"
     } else {
         Write-Info "Addon file not found, skipping: $path"
     }
-    Remove-AddonSource -Filename $Filename
-    Remove-ManifestEntry -Entry $Filename
+
+    $manifestPath = Join-Path $AppDir "manifest.json"
+    $root = Split-Path -Parent (Split-Path -Parent $AppDir)
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        $root = $SpicetifyConfig
+    }
+    $sourcesPath = Join-Path $root "ivLyrics\addon_sources.json"
+
+    Remove-AddonSourceAt -SourcesPath $sourcesPath -Filename $Filename
+    Remove-ManifestEntryAt -ManifestPath $manifestPath -Entry $Filename
 }
 
 if ($Addons) {
-    foreach ($addon in $AddonsList) {
-        Remove-Addon -Filename $addon
+    foreach ($appDir in $IvLyricsApps) {
+        foreach ($addon in $AddonsList) {
+            Remove-AddonFromApp -AppDir $appDir -Filename $addon
+        }
     }
 }
 

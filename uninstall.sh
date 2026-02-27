@@ -155,6 +155,44 @@ $candidates"
     fi
 }
 
+collect_ivlyrics_apps() {
+    local primary_root="$1"
+    local candidates
+    candidates=$(get_spicetify_candidates)
+
+    local roots="$primary_root
+$candidates"
+    local d
+    local seen_roots=""
+    local seen_apps=""
+    local found=0
+    local IFS_BAK="$IFS"
+    IFS=$'\n'
+    for d in $roots; do
+        [ -n "$d" ] || continue
+        case "$seen_roots" in
+            *"|$d|"*) continue ;;
+        esac
+        seen_roots="${seen_roots}|${d}|"
+        local app="$d/CustomApps/ivLyrics"
+        if [ -d "$app" ]; then
+            case "$seen_apps" in
+                *"|$app|"*) ;;
+                *)
+                    printf '%s\n' "$app"
+                    seen_apps="${seen_apps}|${app}|"
+                    found=1
+                    ;;
+            esac
+        fi
+    done
+    IFS="$IFS_BAK"
+
+    if [ "$found" -eq 0 ]; then
+        printf '%s\n' "$primary_root/CustomApps/ivLyrics"
+    fi
+}
+
 refresh_paths() {
     SPICETIFY_CONFIG=$(resolve_spicetify_config)
     IVLYRICS_APP=$(resolve_ivlyrics_app_dir "$SPICETIFY_CONFIG")
@@ -175,10 +213,11 @@ preflight() {
 }
 
 remove_manifest_entry() {
-    local entry="$1"
-    [ -f "$MANIFEST" ] || return 0
+    local manifest_path="$1"
+    local entry="$2"
+    [ -f "$manifest_path" ] || return 0
 
-    local tmp="${MANIFEST}.tmp"
+    local tmp="${manifest_path}.tmp"
     awk -v target="$entry" '
     {
         line=$0
@@ -187,15 +226,16 @@ remove_manifest_entry() {
         if (key == "\"" target "\"," || key == "\"" target "\"") next
         print line
     }
-    ' "$MANIFEST" > "$tmp"
-    mv "$tmp" "$MANIFEST"
+    ' "$manifest_path" > "$tmp"
+    mv "$tmp" "$manifest_path"
 }
 
 remove_addon_source() {
-    local filename="$1"
-    [ -f "$ADDON_SOURCES" ] || return 0
+    local sources_path="$1"
+    local filename="$2"
+    [ -f "$sources_path" ] || return 0
 
-    local tmp="${ADDON_SOURCES}.tmp"
+    local tmp="${sources_path}.tmp"
     awk -v key="$filename" '
     BEGIN { n=0 }
     /"[^"]*"[[:space:]]*:[[:space:]]*"[^"]*"/ {
@@ -215,13 +255,18 @@ remove_addon_source() {
         }
         print "}"
     }
-    ' "$ADDON_SOURCES" > "$tmp"
-    mv "$tmp" "$ADDON_SOURCES"
+    ' "$sources_path" > "$tmp"
+    mv "$tmp" "$sources_path"
 }
 
 remove_addon() {
-    local filename="$1"
-    local path="$IVLYRICS_APP/$filename"
+    local app_dir="$1"
+    local filename="$2"
+    local path="$app_dir/$filename"
+    local root
+    root=$(dirname "$(dirname "$app_dir")")
+    local manifest_path="$app_dir/manifest.json"
+    local sources_path="$root/ivLyrics/addon_sources.json"
 
     if [ -f "$path" ]; then
         rm -f "$path"
@@ -230,15 +275,26 @@ remove_addon() {
         info "Addon file not found, skipping: $path"
     fi
 
-    remove_manifest_entry "$filename"
-    remove_addon_source "$filename"
-    ok "Removed references for $filename"
+    remove_manifest_entry "$manifest_path" "$filename"
+    remove_addon_source "$sources_path" "$filename"
+    ok "Removed references for $filename ($app_dir)"
 }
 
 remove_all_addons() {
-    for addon in $ADDONS; do
-        remove_addon "$addon"
+    local apps
+    apps=$(collect_ivlyrics_apps "$IVLYRICS_ROOT")
+
+    local app
+    local addon
+    local IFS_BAK="$IFS"
+    IFS=$'\n'
+    for app in $apps; do
+        [ -n "$app" ] || continue
+        for addon in $ADDONS; do
+            remove_addon "$app" "$addon"
+        done
     done
+    IFS="$IFS_BAK"
 }
 
 stop_proxy_processes_for_dir() {
@@ -334,6 +390,8 @@ main() {
     info "Using Spicetify config: $SPICETIFY_CONFIG"
     info "Resolved ivLyrics app: $IVLYRICS_APP"
     info "Resolved proxy dir: $CLI_PROXY_DIR"
+    info "Discovered ivLyrics app dirs: $(collect_ivlyrics_apps "$IVLYRICS_ROOT" | tr '\n' ',' | sed 's/,$//')"
+    info "Discovered proxy dirs: $(collect_proxy_dirs "$IVLYRICS_ROOT" | tr '\n' ',' | sed 's/,$//')"
 
     local arg_count="$#"
     local remove_addons_flag=0
