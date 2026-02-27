@@ -12,10 +12,12 @@ MANIFEST="$IVLYRICS_APP/manifest.json"
 ADDON_SOURCES="$IVLYRICS_DATA/addon_sources.json"
 CLI_PROXY_DIR="$SPICETIFY_CONFIG/cli-proxy"
 
-ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
-ADDON_LABELS="Claude Code;Codex CLI;Gemini CLI"
+ADDONS="Addon_AI_CLI_Provider.js"
+ADDON_LABELS="AI CLI Provider (Claude + Gemini + Codex)"
 PROXY_FILES="server.js package.json README.md spotify-with-proxy.sh spotify-with-proxy.ps1"
 NO_NPM_INSTALL=0
+NO_APPLY=0
+DID_ADDON_INSTALL=0
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -165,6 +167,7 @@ install_addon() {
     ok "Updated addon_sources.json"
 
     add_manifest_entry "$filename"
+    DID_ADDON_INSTALL=1
 }
 
 install_proxy() {
@@ -199,6 +202,54 @@ install_proxy() {
     else
         warn "Run manually after installing Node.js: cd \"$CLI_PROXY_DIR\" && npm install"
     fi
+}
+
+proxy_ready() {
+    [ -f "$CLI_PROXY_DIR/package.json" ] && [ -f "$CLI_PROXY_DIR/server.js" ]
+}
+
+ensure_proxy_ready() {
+    if ! proxy_ready; then
+        info "cli-proxy not found. Installing..."
+        install_proxy
+        return
+    fi
+
+    if [ "$NO_NPM_INSTALL" -eq 1 ]; then
+        warn "Skipped npm install (--no-npm-install)."
+        return
+    fi
+
+    if [ -d "$CLI_PROXY_DIR/node_modules" ]; then
+        return
+    fi
+
+    if [ "$HAS_NPM" -eq 1 ]; then
+        info "Installing proxy dependencies ..."
+        if (cd "$CLI_PROXY_DIR" && npm install); then
+            ok "Proxy dependencies installed."
+        else
+            warn "npm install failed. Run manually: cd \"$CLI_PROXY_DIR\" && npm install"
+        fi
+    else
+        warn "Run manually after installing Node.js: cd \"$CLI_PROXY_DIR\" && npm install"
+    fi
+}
+
+start_proxy() {
+    if ! proxy_ready; then
+        err "cli-proxy not found at $CLI_PROXY_DIR"
+        err "Run with --proxy first, or use --start-proxy only to auto-install."
+        exit 1
+    fi
+
+    if [ "$HAS_NPM" -ne 1 ]; then
+        err "npm not found in PATH. Install Node.js and retry."
+        exit 1
+    fi
+
+    info "Starting proxy server ..."
+    (cd "$CLI_PROXY_DIR" && npm start)
 }
 
 # ── selection menu ───────────────────────────────────────────────────────────
@@ -252,11 +303,11 @@ show_menu() {
     addon_list=$(echo "$ADDONS" | tr ' ' '\n')
 
     for num in $selection; do
-        # Validate: must be a positive integer in range 1-3
+        # Validate: must be a positive integer in range 1
         case "$num" in
-            [1-3]) ;;
+            [1]) ;;
             *)
-                warn "Invalid selection: $num (enter 1-3)"
+                warn "Invalid selection: $num (enter 1)"
                 continue
                 ;;
         esac
@@ -285,6 +336,7 @@ main() {
     local arg_count="$#"
     local install_addons_flag=0
     local install_proxy_flag=0
+    local start_proxy_flag=0
     local custom_urls=""
 
     while [ $# -gt 0 ]; do
@@ -299,8 +351,14 @@ main() {
                 install_addons_flag=1
                 install_proxy_flag=1
                 ;;
+            --start-proxy|--start|-s)
+                start_proxy_flag=1
+                ;;
             --no-npm-install)
                 NO_NPM_INSTALL=1
+                ;;
+            --no-apply)
+                NO_APPLY=1
                 ;;
             --help|-h)
                 echo "Usage: bash install.sh [OPTIONS]"
@@ -310,7 +368,9 @@ main() {
                 echo "  --all, -a           Install all addons"
                 echo "  --proxy, -p         Install proxy only"
                 echo "  --full, -f          Install all addons + proxy"
+                echo "  --start-proxy, -s   Start proxy (auto-install if missing)"
                 echo "  --no-npm-install    Skip npm install in proxy directory"
+                echo "  --no-apply          Skip spicetify apply"
                 echo "  --help, -h          Show this help"
                 echo "  <URL>               Install addon from URL"
                 exit 0
@@ -332,6 +392,9 @@ $1"
         if [ "$install_proxy_flag" -eq 1 ]; then
             install_proxy
         fi
+        if [ "$start_proxy_flag" -eq 1 ] && [ "$install_proxy_flag" -eq 0 ]; then
+            ensure_proxy_ready
+        fi
         if [ -n "$custom_urls" ]; then
             local IFS_BAK="$IFS"
             IFS=$'\n'
@@ -346,16 +409,22 @@ $1"
         fi
     fi
 
-    echo ""
-    if [ "$HAS_SPICETIFY" -eq 1 ]; then
-        info "Running spicetify apply ..."
-        if spicetify apply; then
-            ok "spicetify apply completed!"
+    if [ "$NO_APPLY" -eq 0 ] && [ "$DID_ADDON_INSTALL" -eq 1 ]; then
+        echo ""
+        if [ "$HAS_SPICETIFY" -eq 1 ]; then
+            info "Running spicetify apply ..."
+            if spicetify apply; then
+                ok "spicetify apply completed!"
+            else
+                warn "spicetify apply failed. You may need to run it manually."
+            fi
         else
-            warn "spicetify apply failed. You may need to run it manually."
+            warn "Run 'spicetify apply' manually to activate the addons."
         fi
-    else
-        warn "Run 'spicetify apply' manually to activate the addons."
+    fi
+
+    if [ "$start_proxy_flag" -eq 1 ]; then
+        start_proxy
     fi
 
     echo ""

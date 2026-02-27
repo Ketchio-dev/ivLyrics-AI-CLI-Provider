@@ -4,6 +4,7 @@ param(
     [Alias('a')][switch]$All,
     [Alias('p')][switch]$Proxy,
     [Alias('f')][switch]$Full,
+    [Alias('s')][switch]$StartProxy,
     [switch]$NoApply,
     [switch]$NoNpmInstall,
     [Alias('h')][switch]$Help,
@@ -26,6 +27,7 @@ if ($Help) {
     Write-Host "  -All, -a          Install all addons"
     Write-Host "  -Proxy, -p        Install proxy only"
     Write-Host "  -Full, -f         Install all addons + proxy"
+    Write-Host "  -StartProxy, -s   Start proxy (auto-install if missing)"
     Write-Host "  -NoNpmInstall     Skip npm install in proxy directory"
     Write-Host "  -NoApply          Skip spicetify apply"
     Write-Host "  -Help, -h         Show this help"
@@ -33,7 +35,7 @@ if ($Help) {
     exit 0
 }
 
-if (-not ($All -or $Proxy -or $Full) -and (-not $Url -or $Url.Count -eq 0)) {
+if (-not ($All -or $Proxy -or $Full -or $StartProxy) -and (-not $Url -or $Url.Count -eq 0)) {
     $Full = $true
 }
 if ($Full) {
@@ -184,6 +186,15 @@ function Install-AddonFromUrl([string]$AddonUrl) {
     Write-Ok "Updated addon_sources.json"
 
     Ensure-ManifestEntry -Entry $filename
+    $script:DidAddonInstall = $true
+}
+
+function Resolve-NpmCommand {
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if ($null -ne $npm) {
+        return $npm
+    }
+    return Get-Command npm -ErrorAction SilentlyContinue
 }
 
 function Install-Proxy {
@@ -202,10 +213,7 @@ function Install-Proxy {
         return
     }
 
-    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    if ($null -eq $npm) {
-        $npm = Get-Command npm -ErrorAction SilentlyContinue
-    }
+    $npm = Resolve-NpmCommand
     if ($null -eq $npm) {
         Write-Warn "npm not found. Run `cd $CliProxyDir; npm.cmd install` manually."
         return
@@ -216,6 +224,67 @@ function Install-Proxy {
         Write-Info "Running npm install in $CliProxyDir"
         & $npm.Source install
         Write-Ok "npm install completed"
+    } finally {
+        Pop-Location
+    }
+}
+
+function Test-ProxyReady {
+    $pkg = Join-Path $CliProxyDir "package.json"
+    $srv = Join-Path $CliProxyDir "server.js"
+    return (Test-Path -LiteralPath $pkg) -and (Test-Path -LiteralPath $srv)
+}
+
+function Ensure-ProxyReady {
+    if (-not (Test-ProxyReady)) {
+        Write-Info "cli-proxy not found. Installing..."
+        Install-Proxy
+        return
+    }
+
+    if ($NoNpmInstall) {
+        Write-Warn "Skipped npm install (-NoNpmInstall)"
+        return
+    }
+
+    $nodeModules = Join-Path $CliProxyDir "node_modules"
+    if (Test-Path -LiteralPath $nodeModules) {
+        return
+    }
+
+    $npm = Resolve-NpmCommand
+    if ($null -eq $npm) {
+        Write-Warn "npm not found. Run `cd $CliProxyDir; npm.cmd install` manually."
+        return
+    }
+
+    Push-Location $CliProxyDir
+    try {
+        Write-Info "Installing proxy dependencies ..."
+        & $npm.Source install
+        Write-Ok "npm install completed"
+    } finally {
+        Pop-Location
+    }
+}
+
+function Start-ProxyServer {
+    if (-not (Test-ProxyReady)) {
+        Write-Err "cli-proxy not found at $CliProxyDir"
+        Write-Err "Run with -Proxy first, or use -StartProxy only to auto-install."
+        exit 1
+    }
+
+    $npm = Resolve-NpmCommand
+    if ($null -eq $npm) {
+        Write-Err "npm not found in PATH. Install Node.js and retry."
+        exit 1
+    }
+
+    Push-Location $CliProxyDir
+    try {
+        Write-Info "Starting proxy server ..."
+        & $npm.Source start
     } finally {
         Pop-Location
     }
@@ -237,6 +306,7 @@ $needAddons = $All -or ($Url -and $Url.Count -gt 0)
 if ($needAddons) {
     Test-IvLyricsReady
 }
+$DidAddonInstall = $false
 
 if ($All) {
     foreach ($addon in $Addons) {
@@ -254,7 +324,11 @@ if ($Proxy) {
     Install-Proxy
 }
 
-if (-not $NoApply) {
+if ($StartProxy -and -not $Proxy) {
+    Ensure-ProxyReady
+}
+
+if (-not $NoApply -and $DidAddonInstall) {
     $spicetify = Get-Command spicetify -ErrorAction SilentlyContinue
     if ($null -eq $spicetify) {
         Write-Warn "spicetify not found in PATH. Run `spicetify apply` manually."
@@ -267,6 +341,10 @@ if (-not $NoApply) {
             Write-Warn "spicetify apply failed. Run it manually."
         }
     }
+}
+
+if ($StartProxy) {
+    Start-ProxyServer
 }
 
 Write-Host ""

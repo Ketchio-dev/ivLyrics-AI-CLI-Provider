@@ -5,9 +5,7 @@ AI CLI Provider addons for [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics).
 
 | Addon | CLI Tool |
 |-------|----------|
-| `Addon_AI_CLI_ClaudeCode.js` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) |
-| `Addon_AI_CLI_CodexCLI.js` | [Codex CLI](https://github.com/openai/codex) |
-| `Addon_AI_CLI_GeminiCLI.js` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
+| `Addon_AI_CLI_Provider.js` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) + [Codex CLI](https://github.com/openai/codex) + [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
 
 ## Quick Install
 
@@ -46,23 +44,10 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 
 ```bash
 # macOS / Linux
-cfg="$(spicetify -c 2>/dev/null || true)"; base="${cfg%/*}"; proxy=""; for d in "$base" "$HOME/.config/spicetify" "$HOME/.spicetify"; do [ -n "$d" ] || continue; p="$d/cli-proxy"; if [ -f "$p/package.json" ] && [ -f "$p/server.js" ]; then proxy="$p"; break; fi; done; if [ -z "$proxy" ]; then curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy; for d in "$base" "$HOME/.config/spicetify" "$HOME/.spicetify"; do [ -n "$d" ] || continue; p="$d/cli-proxy"; if [ -f "$p/package.json" ] && [ -f "$p/server.js" ]; then proxy="$p"; break; fi; done; fi; [ -n "$proxy" ] || { echo "cli-proxy install failed."; exit 1; }; cd "$proxy" || exit 1; [ -d node_modules ] || npm install; npm start
+curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --start-proxy --no-apply
 
 # Windows PowerShell
-$cfg = $null
-if (Get-Command spicetify -ErrorAction SilentlyContinue) { $cfg = (spicetify -c 2>$null | Select-Object -First 1) }
-$dirs = @()
-if ($cfg) { $dirs += (Split-Path $cfg -Parent) }
-$dirs += "$env:APPDATA\spicetify", "$env:USERPROFILE\.config\spicetify", "$env:USERPROFILE\.spicetify"
-$proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { (Test-Path (Join-Path $_ "package.json")) -and (Test-Path (Join-Path $_ "server.js")) } | Select-Object -First 1
-if (!$proxyDir) {
-  & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy
-  $proxyDir = $dirs | ForEach-Object { Join-Path $_ "cli-proxy" } | Where-Object { (Test-Path (Join-Path $_ "package.json")) -and (Test-Path (Join-Path $_ "server.js")) } | Select-Object -First 1
-}
-if (!$proxyDir) { Write-Host "cli-proxy install failed." -ForegroundColor Red; exit 1 }
-Set-Location $proxyDir
-if (!(Test-Path (Join-Path $proxyDir "node_modules"))) { npm.cmd install }
-npm.cmd start
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -StartProxy -NoApply
 ```
 
 Expected output:
@@ -74,7 +59,7 @@ Expected output:
 
 Then open Spotify and enable the provider in ivLyrics settings.
 
-The command above auto-installs `cli-proxy` on first run (Addon Store install case).
+The command above auto-installs `cli-proxy` on first run (Addon Store install case) and starts it immediately.
 When the addon loads, it also auto-checks proxy updates and applies proxy-only updates in the background (cooldown: 15 minutes).
 When removed from Addon Marketplace, the addon also requests proxy self-cleanup (`/cleanup`) if the proxy is currently running.
 

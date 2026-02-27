@@ -3,8 +3,8 @@
     {
       "name": "AI CLI Provider (Claude + Gemini + Codex)",
       "type": "ai",
-      "version": "2.0.9",
-      "updated": "2026-02-26",
+      "version": "2.0.10",
+      "updated": "2026-02-27",
       "description": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/README.md",
       "githubUrl": "https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider",
       "preview": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/previews/all_cli_provider.png",
