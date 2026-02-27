@@ -392,7 +392,7 @@ $needAddons = $All -or ($Url -and $Url.Count -gt 0)
 if ($needAddons) {
     Test-IvLyricsReady
 }
-$DidAddonInstall = $false
+$script:DidAddonInstall = $false
 
 if ($All) {
     foreach ($addon in $Addons) {
@@ -414,7 +414,7 @@ if ($StartProxy -and -not $Proxy) {
     Ensure-ProxyReady
 }
 
-if (-not $NoApply -and $DidAddonInstall) {
+if (-not $NoApply -and $script:DidAddonInstall) {
     $spicetify = Get-Command spicetify -ErrorAction SilentlyContinue
     if ($null -eq $spicetify) {
         Write-Warn "spicetify not found in PATH. Run `spicetify apply` manually."
