@@ -32,7 +32,7 @@ if ($Help) {
     Write-Host "  -NoApply          Skip spicetify apply"
     Write-Host "  -Help, -h         Show this help"
     Write-Host "  URL               Install addon from URL (.js)"
-    exit 0
+    return
 }
 
 if (-not ($All -or $Proxy -or $Full -or $StartProxy) -and (-not $Url -or $Url.Count -eq 0)) {
@@ -115,13 +115,10 @@ function Download-File([string]$RemoteUrl, [string]$Destination) {
 
 function Test-IvLyricsReady {
     if (-not (Test-Path -LiteralPath $IvLyricsApp)) {
-        Write-Err "ivLyrics not found at $IvLyricsApp"
-        Write-Err "Install ivLyrics first: https://github.com/ivLis-STUDIO/ivLyrics"
-        exit 1
+        throw "ivLyrics not found at $IvLyricsApp`nInstall ivLyrics first: https://github.com/ivLis-STUDIO/ivLyrics"
     }
     if (-not (Test-Path -LiteralPath $Manifest)) {
-        Write-Err "manifest.json not found at $Manifest"
-        exit 1
+        throw "manifest.json not found at $Manifest"
     }
 }
 
@@ -304,15 +301,12 @@ function Ensure-ProxyReady {
 
 function Start-ProxyServer {
     if (-not (Test-ProxyReady)) {
-        Write-Err "cli-proxy not found at $CliProxyDir"
-        Write-Err "Run with -Proxy first, or use -StartProxy only to auto-install."
-        exit 1
+        throw "cli-proxy not found at $CliProxyDir`nRun with -Proxy first, or use -StartProxy only to auto-install."
     }
 
     $npm = Resolve-NpmCommand
     if ($null -eq $npm) {
-        Write-Err "npm not found in PATH. Install Node.js and retry."
-        exit 1
+        throw "npm not found in PATH. Install Node.js and retry."
     }
 
     Push-Location $CliProxyDir
