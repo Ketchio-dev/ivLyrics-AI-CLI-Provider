@@ -9,6 +9,11 @@
 (() => {
     'use strict';
 
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
     const DEFAULT_PROXY_URL = 'http://localhost:19284';
     const ADDON_UPDATE_CHECK_TTL = 3600000;
     const AUTO_PROXY_UPDATE_COOLDOWN_MS = 15 * 60 * 1000;
@@ -527,12 +532,15 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
     function createAddon(config) {
         const { id, name, description, toolId, fallbackModels, safeDefaultModel, isBlockedModel, useCopyrightNotice } = config;
         const LOG_TAG = `[${name}]`;
+        const resolvedDescription = typeof description === 'string'
+            ? description
+            : (description?.en || description?.ko || name);
 
         const ADDON_INFO = {
             id,
             name,
             author: 'Ketchio-dev',
-            description,
+            description: resolvedDescription,
             version: '2.2.5',
             supports: { translate: true, metadata: true, tmi: true }
         };
@@ -1145,10 +1153,21 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
     let registerAttempts = 0;
     const registerAddons = () => {
-        if (window.AIAddonManager) {
-            installMarketplaceUnregisterBridge(addonIds);
-            addons.forEach(addon => window.AIAddonManager.register(addon));
-            console.log('[CLI Provider] All addons registered');
+        if (window.AIAddonManager && typeof window.AIAddonManager.register === 'function') {
+            try {
+                installMarketplaceUnregisterBridge(addonIds);
+            } catch (e) {
+                console.error('[CLI Provider] Failed to initialize marketplace bridge:', e?.message || e);
+            }
+
+            addons.forEach(addon => {
+                try {
+                    window.AIAddonManager.register(addon);
+                } catch (e) {
+                    console.error(`[CLI Provider] Failed to register ${addon.id}:`, e?.message || e);
+                }
+            });
+            console.log('[CLI Provider] Addon registration attempted');
         } else if (++registerAttempts < MAX_REGISTER_RETRIES) {
             setTimeout(registerAddons, 100);
         } else {
@@ -1158,4 +1177,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
     registerAddons();
     console.log('[CLI Provider] Module loaded');
+    } catch (e) {
+        console.error('[CLI Provider] Fatal initialization error:', e?.message || e);
+    }
 })();
