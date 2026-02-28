@@ -421,6 +421,26 @@ function shouldUseShellForCommand(commandPath) {
     return lower.endsWith('.cmd') || lower.endsWith('.bat');
 }
 
+function getProcessInvocation(commandPath, args = []) {
+    const safeCommandPath = normalizeModelId(commandPath);
+    const safeArgs = Array.isArray(args)
+        ? args.map(arg => (typeof arg === 'string' ? arg : String(arg ?? '')))
+        : [];
+
+    if (process.platform === 'win32' && shouldUseShellForCommand(safeCommandPath)) {
+        // Avoid shell=true argument concatenation issues with .cmd/.bat wrappers.
+        const comSpec =
+            process.env.ComSpec ||
+            path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
+        return {
+            command: comSpec,
+            args: ['/d', '/s', '/c', `"${safeCommandPath}"`, ...safeArgs]
+        };
+    }
+
+    return { command: safeCommandPath, args: safeArgs };
+}
+
 function getCliCheckArgs(tool) {
     const tokens = splitCommandTokens(tool.checkCommand || '');
     if (tokens.length === 0) return ['--version'];
@@ -579,12 +599,13 @@ async function checkToolAvailable(toolId) {
             };
         }
         const checkArgs = getCliCheckArgs(tool);
-        const result = spawnSync(commandPath, checkArgs, {
+        const invocation = getProcessInvocation(commandPath, checkArgs);
+        const result = spawnSync(invocation.command, invocation.args, {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf8',
             timeout: TOOL_CHECK_TIMEOUT_MS,
             env: { ...process.env, NO_COLOR: '1' },
-            shell: shouldUseShellForCommand(commandPath),
+            shell: false,
             windowsHide: true,
         });
 
@@ -915,11 +936,12 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
         console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
         console.log(`${'='.repeat(60)}`);
 
-        const proc = spawn(commandPath, args, {
+        const invocation = getProcessInvocation(commandPath, args);
+        const proc = spawn(invocation.command, invocation.args, {
             stdio: ['ignore', 'pipe', 'pipe'],
             cwd: os.tmpdir(),
             env: { ...process.env, NO_COLOR: '1' },
-            shell: shouldUseShellForCommand(commandPath),
+            shell: false,
             windowsHide: true,
         });
 
@@ -980,7 +1002,11 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
                 console.log(`[${toolId}] SUCCESS - Response length: ${result.length} chars`);
                 resolve(result);
             } else {
-                console.log(`[${toolId}] FAILED - Exit code: ${code}`);
+                const stderrPreview = normalizeModelId(stderr).slice(0, 400);
+                console.log(
+                    `[${toolId}] FAILED - Exit code: ${code}` +
+                    (stderrPreview ? `, stderr: ${stderrPreview}` : '')
+                );
                 reject(new Error(stderr || `Process exited with code ${code}`));
             }
         });
@@ -1092,11 +1118,12 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
     console.log(`${'='.repeat(60)}`);
 
-    const proc = spawn(commandPath, args, {
+    const invocation = getProcessInvocation(commandPath, args);
+    const proc = spawn(invocation.command, invocation.args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         cwd: os.tmpdir(),
         env: { ...process.env, NO_COLOR: '1' },
-        shell: shouldUseShellForCommand(commandPath),
+        shell: false,
         windowsHide: true,
     });
 
@@ -1140,7 +1167,11 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         if (settled) return;
         settled = true;
         if (code !== 0) {
-            console.log(`[${toolId}] STREAM FAILED - Exit code: ${code}`);
+            const stderrPreview = normalizeModelId(stderr).slice(0, 400);
+            console.log(
+                `[${toolId}] STREAM FAILED - Exit code: ${code}` +
+                (stderrPreview ? `, stderr: ${stderrPreview}` : '')
+            );
             sendSSEError(res, stderr || `Process exited with code ${code}`);
         } else {
             console.log(`[${toolId}] STREAM SUCCESS - Total: ${totalLength} chars`);
@@ -1531,13 +1562,14 @@ app.post('/update', async (req, res) => {
                 });
             } else {
                 console.log(`[update] Running dependency install: ${npmCommandPath} install`);
-                const npmInstallResult = spawnSync(npmCommandPath, ['install'], {
+                const npmInvocation = getProcessInvocation(npmCommandPath, ['install']);
+                const npmInstallResult = spawnSync(npmInvocation.command, npmInvocation.args, {
                     cwd: __dirname,
                     stdio: ['ignore', 'pipe', 'pipe'],
                     encoding: 'utf8',
                     timeout: 180000,
                     env: { ...process.env },
-                    shell: shouldUseShellForCommand(npmCommandPath),
+                    shell: false,
                     windowsHide: true,
                 });
 
@@ -1668,7 +1700,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Start Server
 // ============================================
 
-app.listen(PORT, '127.0.0.1', () => {
+const server = app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n🚀 ivLyrics CLI Proxy Server v${LOCAL_VERSION}`);
     console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
     console.log(`   Gemini mode: CLI spawn`);
@@ -1708,4 +1740,14 @@ app.listen(PORT, '127.0.0.1', () => {
             console.log('   Run GET /updates for details\n');
         }
     }).catch(() => {});
+});
+
+server.on('error', (err) => {
+    if (err?.code === 'EADDRINUSE') {
+        console.error(`[server] Port ${PORT} is already in use on 127.0.0.1.`);
+        console.error('[server] Another proxy instance is already running. Reusing existing process.');
+        process.exit(0);
+    }
+    console.error(`[server] Failed to start: ${err?.message || err}`);
+    process.exit(1);
 });
