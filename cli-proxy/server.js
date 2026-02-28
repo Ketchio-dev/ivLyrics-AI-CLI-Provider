@@ -523,7 +523,7 @@ const CLI_TOOLS = {
     gemini: {
         mode: 'cli',
         command: 'gemini',
-        checkCommand: 'gemini --version',
+        checkCommand: 'gemini --help',
         defaultModel: GEMINI_DEFAULT_MODEL,
         buildArgs: (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel),
         parseOutput: (stdout) => stdout.trim()
@@ -589,6 +589,18 @@ async function checkToolAvailable(toolId) {
         });
 
         if (result.error) {
+            if (toolId === 'gemini' && result.error.code === 'ETIMEDOUT') {
+                console.warn(
+                    `[gemini] check command timed out after ${TOOL_CHECK_TIMEOUT_MS}ms; ` +
+                    `treating as available because executable is resolvable: ${commandPath}`
+                );
+                return {
+                    available: true,
+                    warning:
+                        `gemini check timed out after ${TOOL_CHECK_TIMEOUT_MS}ms; ` +
+                        `continuing with executable path ${commandPath}`
+                };
+            }
             return {
                 available: false,
                 error: `${tool.command} check failed: ${result.error.message}`
