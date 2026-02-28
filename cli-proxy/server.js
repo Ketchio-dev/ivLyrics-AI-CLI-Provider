@@ -331,10 +331,11 @@ function getCommandNameCandidates(commandName) {
     if (process.platform !== 'win32') return [base];
 
     const lower = base.toLowerCase();
-    const candidates = [base];
+    const candidates = [];
     if (!lower.endsWith('.cmd')) candidates.push(`${base}.cmd`);
     if (!lower.endsWith('.exe')) candidates.push(`${base}.exe`);
     if (!lower.endsWith('.bat')) candidates.push(`${base}.bat`);
+    candidates.push(base);
     return candidates;
 }
 
@@ -362,7 +363,20 @@ function resolveCommandPath(commandName) {
     const candidates = [];
     const addCandidate = (value) => {
         const candidate = trimShellLine(value);
-        if (!candidate || candidates.includes(candidate)) return;
+        if (!candidate) return;
+
+        // On Windows, npm may create an extensionless shim (for POSIX shells)
+        // alongside runnable wrappers like .cmd/.exe/.bat. Prefer wrappers first.
+        if (process.platform === 'win32' && !path.extname(candidate)) {
+            const wrapperCandidates = ['.cmd', '.exe', '.bat'].map(ext => `${candidate}${ext}`);
+            for (const wrapper of wrapperCandidates) {
+                if (wrapper && !candidates.includes(wrapper)) {
+                    candidates.push(wrapper);
+                }
+            }
+        }
+
+        if (candidates.includes(candidate)) return;
         candidates.push(candidate);
     };
 
