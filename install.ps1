@@ -15,6 +15,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $script:NodeAutoInstallAttempted = $false
+$script:LegacyCleanupDone = $false
 
 function Write-Info($Message) { Write-Host "[INFO]  $Message" -ForegroundColor Cyan }
 function Write-Ok($Message) { Write-Host "[OK]    $Message" -ForegroundColor Green }
@@ -136,6 +137,12 @@ $Addons = @(
     "Addon_AI_CLI_Provider.js"
 )
 
+$LegacyAddons = @(
+    "Addon_AI_CLI_ClaudeCode.js",
+    "Addon_AI_CLI_CodexCLI.js",
+    "Addon_AI_CLI_GeminiCLI.js"
+)
+
 $ProxyFiles = @(
     "server.js",
     "package.json",
@@ -209,11 +216,68 @@ function Update-AddonSource([string]$Filename, [string]$RemoteUrl) {
     Write-JsonMap -Path $AddonSources -Map $sources
 }
 
+function Remove-AddonSource([string]$Filename) {
+    if (-not (Test-Path -LiteralPath $AddonSources)) {
+        return
+    }
+    $sources = Read-JsonMap -Path $AddonSources
+    if ($sources.ContainsKey($Filename)) {
+        $sources.Remove($Filename)
+        Write-JsonMap -Path $AddonSources -Map $sources
+        Write-Ok "Removed source entry: $Filename"
+        $script:DidAddonInstall = $true
+    }
+}
+
+function Remove-ManifestEntry([string]$Entry) {
+    if (-not (Test-Path -LiteralPath $Manifest)) {
+        return
+    }
+    $manifestObj = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+    $current = @($manifestObj.subfiles_extension)
+    if ($current.Count -eq 0) {
+        return
+    }
+    if (-not ($current -contains $Entry)) {
+        return
+    }
+    $manifestObj.subfiles_extension = @($current | Where-Object { $_ -ne $Entry })
+    (($manifestObj | ConvertTo-Json -Depth 100) + "`n") | Set-Content -LiteralPath $Manifest -Encoding UTF8
+    Write-Ok "Removed `"$Entry`" from manifest.json"
+    $script:DidAddonInstall = $true
+}
+
+function Remove-LegacyAddonsIfPresent {
+    if ($script:LegacyCleanupDone) {
+        return
+    }
+    $script:LegacyCleanupDone = $true
+
+    foreach ($legacy in $LegacyAddons) {
+        $legacyPath = Join-Path $IvLyricsApp $legacy
+        if (Test-Path -LiteralPath $legacyPath) {
+            try {
+                Remove-Item -LiteralPath $legacyPath -Force
+                Write-Ok "Removed legacy addon file: $legacy"
+                $script:DidAddonInstall = $true
+            } catch {
+                Write-Warn "Failed to remove legacy addon file: $legacy ($($_.Exception.Message))"
+            }
+        }
+        Remove-AddonSource -Filename $legacy
+        Remove-ManifestEntry -Entry $legacy
+    }
+}
+
 function Install-AddonFromUrl([string]$AddonUrl) {
     $filename = [System.IO.Path]::GetFileName($AddonUrl)
     if ([string]::IsNullOrWhiteSpace($filename) -or -not $filename.EndsWith(".js")) {
         Write-Err "URL must point to a .js file: $AddonUrl"
         return
+    }
+
+    if ($filename -eq "Addon_AI_CLI_Provider.js") {
+        Remove-LegacyAddonsIfPresent
     }
 
     $dest = Join-Path $IvLyricsApp $filename
