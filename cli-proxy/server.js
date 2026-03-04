@@ -96,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '3.0.0';
+const LOCAL_VERSION = '3.1.0';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -480,8 +480,7 @@ function spawnCLI(commandPath, args, options) {
 
     if (useShell) {
         const quoted = quoteArgsForShell(args, true);
-        const cmdString = commandPath + (quoted.length ? ' ' + quoted.join(' ') : '');
-        return spawn(cmdString, [], { ...options, shell: true });
+        return spawn(commandPath, quoted, { ...options, shell: true });
     }
 
     return spawn(commandPath, args, options);
@@ -635,6 +634,7 @@ const CLI_TOOLS = {
         mode: 'cli',
         command: 'claude',
         checkCommand: 'claude --version',
+        installUrl: 'https://docs.anthropic.com/en/docs/claude-code',
         defaultModel: CLAUDE_SAFE_DEFAULT_MODEL,
         buildArgs: (prompt, model, defaultModel) => {
             const requestedModel = normalizeModelId(model || defaultModel);
@@ -660,6 +660,7 @@ const CLI_TOOLS = {
         mode: 'cli',
         command: 'gemini',
         checkCommand: 'gemini --version',
+        installUrl: 'https://github.com/google-gemini/gemini-cli',
         defaultModel: GEMINI_DEFAULT_MODEL,
         buildArgs: (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel),
         buildStreamArgs: (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel, 'stream-json'),
@@ -671,6 +672,7 @@ const CLI_TOOLS = {
         mode: 'cli',
         command: 'codex',
         checkCommand: 'codex --version',
+        installUrl: 'https://github.com/openai/codex',
         defaultModel: '',
         buildArgs: (prompt, model, defaultModel) => buildCodexCliArgs(prompt, model, defaultModel),
         buildStreamArgs: (prompt, model, defaultModel) => buildCodexCliArgs(prompt, model, defaultModel, 'json'),
@@ -696,7 +698,7 @@ async function checkToolAvailable(toolId) {
                 available: false,
                 error:
                     `${tool.command} executable not found. ` +
-                    `Ensure it is installed and available in PATH, then restart Spotify/terminal.`
+                    `Install: ${tool.installUrl} — then ensure it's in your PATH and restart Spotify/terminal.`
             };
         }
         const checkArgs = getCliCheckArgs(tool);
@@ -1949,44 +1951,60 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Start Server
 // ============================================
 
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`\n🚀 ivLyrics CLI Proxy Server v${LOCAL_VERSION}`);
-    console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
-    console.log(`   Gemini mode: CLI spawn`);
-    console.log(`\n📋 Available endpoints:`);
-    console.log(`   GET  /health   - Check server status and available tools`);
-    console.log(`   GET  /tools    - List available CLI tools`);
-    console.log(`   GET  /models   - List available models per tool`);
-    console.log(`   POST /generate - Generate text (supports ?stream=true for SSE)`);
-    console.log(`   GET  /updates  - Check for available updates`);
-    console.log(`   POST /cleanup  - Remove proxy directory and exit`);
-    console.log(`   POST /update   - Download and apply updates`);
-    console.log(`   POST /v1/chat/completions - OpenAI-compatible endpoint`);
-    console.log(`\n🔧 Checking available tools...`);
+if (require.main === module) {
+    app.listen(PORT, '127.0.0.1', () => {
+        console.log(`\n🚀 ivLyrics CLI Proxy Server v${LOCAL_VERSION}`);
+        console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
+        console.log(`   Gemini mode: CLI spawn`);
+        console.log(`\n📋 Available endpoints:`);
+        console.log(`   GET  /health   - Check server status and available tools`);
+        console.log(`   GET  /tools    - List available CLI tools`);
+        console.log(`   GET  /models   - List available models per tool`);
+        console.log(`   POST /generate - Generate text (supports ?stream=true for SSE)`);
+        console.log(`   GET  /updates  - Check for available updates`);
+        console.log(`   POST /cleanup  - Remove proxy directory and exit`);
+        console.log(`   POST /update   - Download and apply updates`);
+        console.log(`   POST /v1/chat/completions - OpenAI-compatible endpoint`);
+        console.log(`\n🔧 Checking available tools...`);
 
-    Promise.allSettled(
-        Object.keys(CLI_TOOLS).map(async (toolId) => {
-            const tool = CLI_TOOLS[toolId];
-            const status = await checkToolAvailable(toolId);
-            const icon = status.available ? '✓' : '✗';
-            const modeTag = '[CLI]';
-            console.log(`   ${icon} ${toolId} ${modeTag}: ${status.available ? 'available' : status.error} (default: ${tool.defaultModel || 'auto'})`);
-        })
-    ).then(() => {
-        console.log('');
+        Promise.allSettled(
+            Object.keys(CLI_TOOLS).map(async (toolId) => {
+                const tool = CLI_TOOLS[toolId];
+                const status = await checkToolAvailable(toolId);
+                const icon = status.available ? '✓' : '✗';
+                const modeTag = '[CLI]';
+                console.log(`   ${icon} ${toolId} ${modeTag}: ${status.available ? 'available' : status.error} (default: ${tool.defaultModel || 'auto'})`);
+            })
+        ).then(() => {
+            console.log('');
+        });
+
+        // Async update check on startup
+        checkForUpdates().then((result) => {
+            if (result.hasUpdates) {
+                console.log('📦 Updates available:');
+                if (result.proxy) {
+                    console.log(`   Proxy: ${result.proxy.current} → ${result.proxy.latest}`);
+                }
+                for (const [filename, info] of Object.entries(result.addons || {})) {
+                    console.log(`   ${filename}: ${info.current} → ${info.latest}`);
+                }
+                console.log('   Run GET /updates for details\n');
+            }
+        }).catch(() => {});
     });
+}
 
-    // Async update check on startup
-    checkForUpdates().then((result) => {
-        if (result.hasUpdates) {
-            console.log('📦 Updates available:');
-            if (result.proxy) {
-                console.log(`   Proxy: ${result.proxy.current} → ${result.proxy.latest}`);
-            }
-            for (const [filename, info] of Object.entries(result.addons || {})) {
-                console.log(`   ${filename}: ${info.current} → ${info.latest}`);
-            }
-            console.log('   Run GET /updates for details\n');
-        }
-    }).catch(() => {});
-});
+// Exported for testing (pure functions only)
+if (typeof module !== 'undefined') {
+    module.exports = {
+        isNewerVersion,
+        normalizeModelId,
+        normalizeGeminiModel,
+        resolveGeminiModel,
+        isBlockedClaudeModel,
+        resolveClaudeModel,
+        extractCodexChunkFromEvent,
+        parseCodexJsonOutput,
+    };
+}

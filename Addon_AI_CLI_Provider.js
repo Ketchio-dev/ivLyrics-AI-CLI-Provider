@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 3.0.0
+ * @version 3.1.0
  */
 
 (() => {
@@ -824,6 +824,12 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
             async init() {
                 console.log(`${LOG_TAG} Initialized (v${ADDON_INFO.version})`);
+                // Migrate legacy localhost URL to 127.0.0.1 (fixes Windows IPv6 resolution)
+                const savedProxyUrl = getSetting('proxy-url', '');
+                if (savedProxyUrl === 'http://localhost:19284') {
+                    setSetting('proxy-url', 'http://127.0.0.1:19284');
+                    console.log(`${LOG_TAG} Migrated proxy URL: localhost → 127.0.0.1`);
+                }
                 const proxyUrl = getProxyUrl();
                 checkAddonUpdate(id, proxyUrl).catch(() => {});
                 // Keep local custom proxy behavior stable; do not auto-overwrite proxy files.
@@ -856,25 +862,33 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     const [hasUpdates, setHasUpdates] = useState(false);
 
                     const refreshProxyStatus = useCallback(async () => {
+                        const MAX_RETRIES = 3;
                         setProxyStatus({ state: 'checking', message: 'Checking proxy status...' });
-                        try {
-                            const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 4000);
-                            const response = await fetch(`${proxyUrl}/health`, { signal: controller.signal });
-                            clearTimeout(timeoutId);
-                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                            const health = await response.json();
-                            const version = (health?.version || 'unknown').toString();
-                            const toolHealth = health?.tools?.[toolId];
-                            if (toolHealth?.available) {
-                                setProxyStatus({ state: 'running', message: `Running (proxy v${version})` });
-                            } else {
-                                const detail = toolHealth?.error ? `: ${toolHealth.error}` : '';
-                                setProxyStatus({ state: 'error', message: `Proxy running but ${toolId} unavailable${detail}` });
+                        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                            try {
+                                const controller = new AbortController();
+                                const timeoutId = setTimeout(() => controller.abort(), 4000);
+                                const response = await fetch(`${proxyUrl}/health`, { signal: controller.signal });
+                                clearTimeout(timeoutId);
+                                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                                const health = await response.json();
+                                const version = (health?.version || 'unknown').toString();
+                                const toolHealth = health?.tools?.[toolId];
+                                if (toolHealth?.available) {
+                                    setProxyStatus({ state: 'running', message: `Running (proxy v${version})` });
+                                } else {
+                                    const detail = toolHealth?.error ? `: ${toolHealth.error}` : '';
+                                    setProxyStatus({ state: 'error', message: `Proxy running but ${toolId} unavailable${detail}` });
+                                }
+                                return;
+                            } catch {
+                                if (attempt < MAX_RETRIES - 1) {
+                                    setProxyStatus({ state: 'checking', message: `Retrying... (${attempt + 2}/${MAX_RETRIES})` });
+                                    await new Promise(r => setTimeout(r, 1000));
+                                }
                             }
-                        } catch {
-                            setProxyStatus({ state: 'error', message: `Not running at ${proxyUrl}. Run setup command and keep terminal open.` });
                         }
+                        setProxyStatus({ state: 'error', message: `Not running at ${proxyUrl}. Run setup command and keep terminal open.` });
                     }, [proxyUrl]);
 
                     const loadModels = useCallback(async () => {
