@@ -53,7 +53,7 @@ Set-Location (Join-Path $base "cli-proxy")
 npm.cmd start
 ```
 
-서버가 `http://localhost:19284`에서 시작됩니다.
+서버가 `http://127.0.0.1:19284`에서 시작됩니다.
 
 ## 사용법
 
@@ -67,28 +67,28 @@ npm.cmd start
 서버 상태 및 사용 가능한 도구 확인
 
 ```bash
-curl http://localhost:19284/health
+curl http://127.0.0.1:19284/health
 ```
 
 ### GET /tools
 사용 가능한 CLI 도구 목록
 
 ```bash
-curl http://localhost:19284/tools
+curl http://127.0.0.1:19284/tools
 ```
 
 ### GET /models
 도구별 사용 가능한 모델 목록
 
 ```bash
-curl http://localhost:19284/models?tool=claude
+curl http://127.0.0.1:19284/models?tool=claude
 ```
 
 ### POST /generate
 텍스트 생성 요청
 
 ```bash
-curl -X POST http://localhost:19284/generate \
+curl -X POST http://127.0.0.1:19284/generate \
   -H "Content-Type: application/json" \
   -d '{"tool": "claude", "prompt": "Hello, world!"}'
 ```
@@ -97,7 +97,7 @@ curl -X POST http://localhost:19284/generate \
 OpenAI API 호환 엔드포인트
 
 ```bash
-curl -X POST http://localhost:19284/v1/chat/completions \
+curl -X POST http://127.0.0.1:19284/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude",
@@ -144,7 +144,7 @@ npm.cmd start
 프록시 서버가 실행 중인지 확인하세요.
 
 ```bash
-curl http://localhost:19284/health
+curl http://127.0.0.1:19284/health
 ```
 
 ## 새로운 CLI 도구 추가

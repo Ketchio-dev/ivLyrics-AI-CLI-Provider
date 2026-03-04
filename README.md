@@ -64,8 +64,8 @@ winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreeme
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.2.7
-   Running on http://localhost:19284
+🚀 ivLyrics CLI Proxy Server v3.0.0
+   Running on http://127.0.0.1:19284
 ```
 
 Then open Spotify and enable the provider in ivLyrics settings.
