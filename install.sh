@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPO_BASE="https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main"
+REPO_BASE="${REPO_BASE:-https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main}"
 SPICETIFY_CONFIG=""
 IVLYRICS_APP=""
 IVLYRICS_ROOT=""
@@ -16,7 +16,7 @@ CLI_PROXY_DIR=""
 ADDONS="Addon_AI_CLI_Provider.js"
 ADDON_LABELS="AI CLI Provider (Claude + Gemini + Codex)"
 LEGACY_ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
-PROXY_FILES="server.js package.json README.md spotify-with-proxy.sh spotify-with-proxy.ps1"
+PROXY_FILES="server.js package.json package-lock.json README.md spotify-with-proxy.sh spotify-with-proxy.ps1"
 NO_NPM_INSTALL=0
 NO_APPLY=0
 DID_ADDON_INSTALL=0

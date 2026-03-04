@@ -96,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.2.6';
+const LOCAL_VERSION = '2.2.7';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -1726,11 +1726,16 @@ app.post('/update', async (req, res) => {
         if (target === 'proxy' || target === 'all') {
             const serverLocalPath = path.join(__dirname, 'server.js');
             const pkgLocalPath = path.join(__dirname, 'package.json');
+            const lockLocalPath = path.join(__dirname, 'package-lock.json');
             const result = await downloadFile('cli-proxy/server.js', serverLocalPath, 'server.js');
             results.push(result);
             try {
                 const pkgResult = await downloadFile('cli-proxy/package.json', pkgLocalPath, 'package.json');
                 results.push(pkgResult);
+            } catch {}
+            try {
+                const lockResult = await downloadFile('cli-proxy/package-lock.json', lockLocalPath, 'package-lock.json');
+                results.push(lockResult);
             } catch {}
 
             const npmCommandPath = resolveCommandPath('npm');

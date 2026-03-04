@@ -146,6 +146,7 @@ $LegacyAddons = @(
 $ProxyFiles = @(
     "server.js",
     "package.json",
+    "package-lock.json",
     "README.md",
     "spotify-with-proxy.sh",
     "spotify-with-proxy.ps1"

@@ -1,7 +1,7 @@
 {
     "schemaVersion": 1,
-    "proxy": { "version": "2.2.6" },
+    "proxy": { "version": "2.2.7" },
     "addons": {
-        "Addon_AI_CLI_Provider.js": { "version": "2.2.6", "id": "cli-claude" }
+        "Addon_AI_CLI_Provider.js": { "version": "2.2.7", "id": "cli-claude" }
     }
 }

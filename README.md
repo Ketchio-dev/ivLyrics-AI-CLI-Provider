@@ -56,11 +56,12 @@ Windows note:
 ```powershell
 winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements
 ```
+- Installer now downloads `package-lock.json` for deterministic proxy dependency installs.
 
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.2.6
+🚀 ivLyrics CLI Proxy Server v2.2.7
    Running on http://localhost:19284
 ```
 
