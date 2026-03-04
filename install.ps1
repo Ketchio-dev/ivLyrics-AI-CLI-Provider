@@ -468,8 +468,8 @@ function Install-Proxy {
 
     $npm = Resolve-NpmCommand -TryAutoInstall
     if ($null -eq $npm) {
-        Write-Warn "npm not found. Run `winget install --id OpenJS.NodeJS.LTS -e --source winget` and retry."
-        Write-Warn "Manual fallback: `cd $CliProxyDir; npm.cmd install`"
+        Write-Warn "npm not found. Run:  winget install --id OpenJS.NodeJS.LTS -e --source winget"
+        Write-Warn ("Manual fallback:  cd " + $CliProxyDir + "; npm.cmd install")
         return
     }
 
@@ -516,8 +516,8 @@ function Ensure-ProxyReady {
 
     $npm = Resolve-NpmCommand -TryAutoInstall
     if ($null -eq $npm) {
-        Write-Warn "npm not found. Run `winget install --id OpenJS.NodeJS.LTS -e --source winget` and retry."
-        Write-Warn "Manual fallback: `cd $CliProxyDir; npm.cmd install`"
+        Write-Warn "npm not found. Run:  winget install --id OpenJS.NodeJS.LTS -e --source winget"
+        Write-Warn ("Manual fallback:  cd " + $CliProxyDir + "; npm.cmd install")
         return
     }
 
