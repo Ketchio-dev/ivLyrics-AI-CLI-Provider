@@ -429,7 +429,43 @@ function quoteArgsForShell(args, useShell) {
     if (!useShell) return args;
     return args.map(a => {
         if (!/[\s"]/.test(a)) return a;
-        return '"' + a.replace(/"/g, '\\"') + '"';
+        return '"' + a.replace(/"/g, '""') + '"';
+    });
+}
+
+/**
+ * Spawn a CLI command, handling Windows .cmd files with multi-line arguments.
+ *
+ * cmd.exe cannot pass newlines inside arguments. When a multi-line arg is
+ * detected on Windows, we write it to a temp file and use PowerShell to
+ * read it into a variable, bypassing cmd.exe argument parsing entirely.
+ */
+function spawnCLI(commandPath, args, options) {
+    const useShell = shouldUseShellForCommand(commandPath);
+    const multilineIdx = useShell ? args.findIndex(a => /\n/.test(String(a))) : -1;
+
+    if (multilineIdx >= 0) {
+        const tmpFile = path.join(os.tmpdir(), `ivlyrics-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+        fs.writeFileSync(tmpFile, args[multilineIdx], 'utf8');
+
+        const psArgs = args.map((a, i) => {
+            if (i === multilineIdx) return '$_p';
+            return "'" + String(a).replace(/'/g, "''") + "'";
+        }).join(' ');
+        const psCmd = "$_p = Get-Content -Raw '" + tmpFile.replace(/'/g, "''") +
+            "'; & '" + commandPath.replace(/'/g, "''") + "' " + psArgs;
+
+        const proc = spawn('powershell.exe', ['-NoProfile', '-Command', psCmd], {
+            ...options,
+            shell: false,
+        });
+        proc.on('close', () => { try { fs.unlinkSync(tmpFile); } catch {} });
+        return proc;
+    }
+
+    return spawn(commandPath, quoteArgsForShell(args, useShell), {
+        ...options,
+        shell: useShell,
     });
 }
 
@@ -999,28 +1035,12 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
         console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
         console.log(`${'='.repeat(60)}`);
 
-        const useShell = shouldUseShellForCommand(commandPath);
-        // On Windows, cmd.exe cannot handle newlines in arguments.
-        // Pipe multi-line prompts via stdin instead.
-        let stdinPrompt = null;
-        let spawnArgs;
-        if (useShell && args.length > 0 && /\n/.test(args[args.length - 1])) {
-            stdinPrompt = args[args.length - 1];
-            spawnArgs = quoteArgsForShell(args.slice(0, -1), useShell);
-        } else {
-            spawnArgs = quoteArgsForShell(args, useShell);
-        }
-        const proc = spawn(commandPath, spawnArgs, {
-            stdio: [stdinPrompt ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+        const proc = spawnCLI(commandPath, args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
             cwd: os.tmpdir(),
             env: { ...process.env, NO_COLOR: '1' },
-            shell: useShell,
             windowsHide: true,
         });
-        if (stdinPrompt) {
-            proc.stdin.write(stdinPrompt);
-            proc.stdin.end();
-        }
 
         let stdout = '';
         let stderr = '';
@@ -1198,26 +1218,12 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
     console.log(`${'='.repeat(60)}`);
 
-    const useShell = shouldUseShellForCommand(commandPath);
-    let stdinPrompt = null;
-    let spawnArgs;
-    if (useShell && args.length > 0 && /\n/.test(args[args.length - 1])) {
-        stdinPrompt = args[args.length - 1];
-        spawnArgs = quoteArgsForShell(args.slice(0, -1), useShell);
-    } else {
-        spawnArgs = quoteArgsForShell(args, useShell);
-    }
-    const proc = spawn(commandPath, spawnArgs, {
-        stdio: [stdinPrompt ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    const proc = spawnCLI(commandPath, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
         cwd: os.tmpdir(),
         env: { ...process.env, NO_COLOR: '1' },
-        shell: useShell,
         windowsHide: true,
     });
-    if (stdinPrompt) {
-        proc.stdin.write(stdinPrompt);
-        proc.stdin.end();
-    }
 
     let stderr = '';
     let settled = false;

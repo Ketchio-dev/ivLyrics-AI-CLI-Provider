@@ -477,7 +477,11 @@ function Install-Proxy {
     try {
         Write-Info "Running npm install in $CliProxyDir"
         & $npm.Source install
-        Write-Ok "npm install completed"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "npm install exited with code $LASTEXITCODE"
+        } else {
+            Write-Ok "npm install completed"
+        }
     } finally {
         Pop-Location
     }
@@ -525,7 +529,11 @@ function Ensure-ProxyReady {
     try {
         Write-Info "Installing proxy dependencies ..."
         & $npm.Source install
-        Write-Ok "npm install completed"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "npm install exited with code $LASTEXITCODE"
+        } else {
+            Write-Ok "npm install completed"
+        }
     } finally {
         Pop-Location
     }
@@ -591,7 +599,7 @@ if ($StartProxy -and -not $Proxy) {
 if (-not $NoApply -and $script:DidAddonInstall) {
     $spicetify = Get-Command spicetify -ErrorAction SilentlyContinue
     if ($null -eq $spicetify) {
-        Write-Warn "spicetify not found in PATH. Run `spicetify apply` manually."
+        Write-Warn "spicetify not found in PATH. Run 'spicetify apply' manually."
     } else {
         Write-Info "Running spicetify apply ..."
         try {
