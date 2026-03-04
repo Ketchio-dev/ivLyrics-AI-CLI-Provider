@@ -54,7 +54,7 @@ const PORT = process.env.PORT || 19284;
 // ============================================
 
 const DEFAULT_TIMEOUT_MS = 120000;        // Default CLI process timeout
-const TOOL_CHECK_TIMEOUT_MS = 10000;      // Tool availability check timeout (spawnSync)
+const TOOL_CHECK_TIMEOUT_MS = 30000;      // Tool availability check timeout (spawnSync)
 const HEALTH_CHECK_TIMEOUT_MS = 12000;    // Per-tool timeout in /health endpoint
 const RATE_LIMIT_WINDOW_MS = 60000;       // Rate limit window (1 minute)
 const RATE_LIMIT_MAX_REQUESTS = 120;      // Max /generate requests per window
@@ -433,6 +433,36 @@ function quoteArgsForShell(args, useShell) {
     });
 }
 
+function quoteArgForCmd(arg) {
+    const value = String(arg);
+    if (value === '') return '""';
+    if (!/[\s"]/g.test(value)) return value;
+    return '"' + value.replace(/"/g, '""') + '"';
+}
+
+function buildCmdCommand(commandPath, args) {
+    const cmdParts = [quoteArgForCmd(commandPath), ...args.map(quoteArgForCmd)];
+    return cmdParts.join(' ');
+}
+
+function spawnWithCmdWrapper(commandPath, args, options) {
+    const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe';
+    const commandLine = buildCmdCommand(commandPath, args);
+    return spawn(comspec, ['/d', '/s', '/c', commandLine], {
+        ...options,
+        shell: false,
+    });
+}
+
+function spawnSyncWithCmdWrapper(commandPath, args, options) {
+    const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe';
+    const commandLine = buildCmdCommand(commandPath, args);
+    return spawnSync(comspec, ['/d', '/s', '/c', commandLine], {
+        ...options,
+        shell: false,
+    });
+}
+
 /**
  * Force-kill a spawned process tree.
  * On Windows with shell:true, SIGKILL only kills the wrapper cmd.exe,
@@ -480,7 +510,7 @@ function spawnCLI(commandPath, args, options) {
 
     if (useShell) {
         const quoted = quoteArgsForShell(args, true);
-        return spawn(commandPath, quoted, { ...options, shell: true });
+        return spawnWithCmdWrapper(commandPath, quoted, options);
     }
 
     return spawn(commandPath, args, options);
@@ -703,14 +733,16 @@ async function checkToolAvailable(toolId) {
         }
         const useShell = shouldUseShellForCommand(commandPath);
         const checkArgs = quoteArgsForShell(getCliCheckArgs(tool), useShell);
-        const result = spawnSync(commandPath, checkArgs, {
+        const spawnOptions = {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf8',
             timeout: TOOL_CHECK_TIMEOUT_MS,
             env: { ...process.env, NO_COLOR: '1' },
-            shell: useShell,
             windowsHide: true,
-        });
+        };
+        const result = useShell
+            ? spawnSyncWithCmdWrapper(commandPath, checkArgs, spawnOptions)
+            : spawnSync(commandPath, checkArgs, { ...spawnOptions, shell: false });
 
         if (result.error) {
             return {
@@ -1816,15 +1848,18 @@ app.post('/update', async (req, res) => {
             } else {
                 console.log(`[update] Running dependency install: ${npmCommandPath} install`);
                 const npmUseShell = shouldUseShellForCommand(npmCommandPath);
-                const npmInstallResult = spawnSync(npmCommandPath, quoteArgsForShell(['install'], npmUseShell), {
+                const npmInstallArgs = quoteArgsForShell(['install'], npmUseShell);
+                const npmSpawnOptions = {
                     cwd: __dirname,
                     stdio: ['ignore', 'pipe', 'pipe'],
                     encoding: 'utf8',
                     timeout: 180000,
                     env: { ...process.env },
-                    shell: npmUseShell,
                     windowsHide: true,
-                });
+                };
+                const npmInstallResult = npmUseShell
+                    ? spawnSyncWithCmdWrapper(npmCommandPath, npmInstallArgs, npmSpawnOptions)
+                    : spawnSync(npmCommandPath, npmInstallArgs, { ...npmSpawnOptions, shell: false });
 
                 if (npmInstallResult.error || npmInstallResult.status !== 0) {
                     const detail =
