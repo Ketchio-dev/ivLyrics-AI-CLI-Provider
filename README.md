@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 ## Prerequisites
 
 - [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics) installed
-- [Node.js](https://nodejs.org/) v18+
+- [Node.js](https://nodejs.org/) v18+ (Windows installer tries auto-install if missing)
 - At least one CLI tool installed (Claude Code / Codex CLI / Gemini CLI)
 
 ## Start proxy server
@@ -50,10 +50,17 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -StartProxy -NoApply
 ```
 
+Windows note:
+- If `npm` is missing, `install.ps1` tries Node.js LTS auto-install via `winget`, then `choco`, then `scoop`.
+- If auto-install fails, run:
+```powershell
+winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements
+```
+
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v2.2.5
+🚀 ivLyrics CLI Proxy Server v2.2.6
    Running on http://localhost:19284
 ```
 
@@ -74,12 +81,16 @@ Invoke-RestMethod http://127.0.0.1:19284/health
 
 Marketplace note:
 Addon Marketplace install downloads only the addon file. You still need to run the start command once.
-When the addon loads, it also auto-checks proxy updates and applies proxy-only updates in the background (cooldown: 15 minutes).
+When the addon loads, it checks update availability via proxy (`/updates`). Apply updates manually from addon settings (`Check for Updates` / `Update Now`).
 When removed from Addon Marketplace, the addon also requests proxy self-cleanup (`/cleanup`) if the proxy is currently running.
 
 Windows path note:
 - Common locations checked automatically: `%LocalAppData%\spicetify`, `%AppData%\spicetify`, `%UserProfile%\.config\spicetify`, `%UserProfile%\.spicetify`
 - Addon is installed to `.../CustomApps/ivLyrics`, and proxy is installed to `.../cli-proxy` in the same detected Spicetify root.
+
+Legacy addon note:
+- `Addon_AI_CLI_ClaudeCode.js`, `Addon_AI_CLI_CodexCLI.js`, `Addon_AI_CLI_GeminiCLI.js` are deprecated.
+- Installing `Addon_AI_CLI_Provider.js` now removes those legacy files and related manifest/source entries automatically.
 
 ## Gemini mode
 

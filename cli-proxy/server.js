@@ -96,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.2.5';
+const LOCAL_VERSION = '2.2.6';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -421,26 +421,6 @@ function shouldUseShellForCommand(commandPath) {
     return lower.endsWith('.cmd') || lower.endsWith('.bat');
 }
 
-function getProcessInvocation(commandPath, args = []) {
-    const safeCommandPath = normalizeModelId(commandPath);
-    const safeArgs = Array.isArray(args)
-        ? args.map(arg => (typeof arg === 'string' ? arg : String(arg ?? '')))
-        : [];
-
-    if (process.platform === 'win32' && shouldUseShellForCommand(safeCommandPath)) {
-        // Avoid shell=true argument concatenation issues with .cmd/.bat wrappers.
-        const comSpec =
-            process.env.ComSpec ||
-            path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
-        return {
-            command: comSpec,
-            args: ['/d', '/s', '/c', `"${safeCommandPath}"`, ...safeArgs]
-        };
-    }
-
-    return { command: safeCommandPath, args: safeArgs };
-}
-
 function getCliCheckArgs(tool) {
     const tokens = splitCommandTokens(tool.checkCommand || '');
     if (tokens.length === 0) return ['--version'];
@@ -497,16 +477,86 @@ function resolveGeminiModel(modelId, fallbackModel = GEMINI_DEFAULT_MODEL) {
     return normalized;
 }
 
-function buildGeminiCliArgs(prompt, model, defaultModel) {
+function buildGeminiCliArgs(prompt, model, defaultModel, outputFormat = 'text') {
     const useModel = resolveGeminiModel(model || defaultModel, GEMINI_DEFAULT_MODEL);
     const args = [
         '--prompt',
         prompt,
         '--output-format',
-        'text',
+        outputFormat,
     ];
     if (useModel) args.unshift('--model', useModel);
     return args;
+}
+
+function buildCodexCliArgs(prompt, model, defaultModel, outputFormat = 'text') {
+    const useModel = normalizeModelId(model || defaultModel);
+    const configArgs = [];
+    if (useModel) {
+        configArgs.push('--config', `model="${useModel}"`);
+    }
+
+    const forcedReasoningEffort = resolveCodexForcedReasoningEffort(useModel);
+    if (forcedReasoningEffort) {
+        configArgs.push('--config', `model_reasoning_effort="${forcedReasoningEffort}"`);
+        console.log(
+            `[codex] forcing model_reasoning_effort="${forcedReasoningEffort}"` +
+            (useModel ? ` for ${useModel}` : '')
+        );
+    }
+
+    const args = [...configArgs, 'exec', '--skip-git-repo-check'];
+    if (outputFormat === 'json') {
+        args.push('--json');
+    }
+    args.push(prompt);
+    return args;
+}
+
+function extractCodexChunkFromEvent(parsed) {
+    if (!parsed || typeof parsed !== 'object') return '';
+    if (parsed.type === 'item.completed') {
+        const item = parsed.item || {};
+        if (item.type === 'agent_message') {
+            return typeof item.text === 'string' ? item.text : '';
+        }
+        return '';
+    }
+
+    // Future-proofing: some Codex builds may emit delta events.
+    const deltaTextCandidates = [
+        parsed?.delta?.text,
+        parsed?.delta?.content,
+        parsed?.item?.delta?.text,
+        parsed?.item?.delta?.content,
+        parsed?.textDelta,
+        parsed?.contentDelta,
+    ];
+    for (const candidate of deltaTextCandidates) {
+        if (typeof candidate === 'string' && candidate) {
+            return candidate;
+        }
+    }
+    return '';
+}
+
+function parseCodexJsonOutput(stdout) {
+    const lines = String(stdout || '').split(/\r?\n/);
+    const chunks = [];
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let parsed;
+        try {
+            parsed = JSON.parse(trimmed);
+        } catch {
+            continue;
+        }
+        const chunk = extractCodexChunkFromEvent(parsed);
+        if (chunk) chunks.push(chunk);
+    }
+    if (chunks.length > 0) return chunks.join('');
+    return String(stdout || '').trim();
 }
 
 // ============================================
@@ -543,9 +593,10 @@ const CLI_TOOLS = {
     gemini: {
         mode: 'cli',
         command: 'gemini',
-        checkCommand: 'gemini --help',
+        checkCommand: 'gemini --version',
         defaultModel: GEMINI_DEFAULT_MODEL,
         buildArgs: (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel),
+        buildStreamArgs: (prompt, model, defaultModel) => buildGeminiCliArgs(prompt, model, defaultModel, 'stream-json'),
         parseOutput: (stdout) => stdout.trim()
     },
 
@@ -555,25 +606,9 @@ const CLI_TOOLS = {
         command: 'codex',
         checkCommand: 'codex --version',
         defaultModel: '',
-        buildArgs: (prompt, model, defaultModel) => {
-            const useModel = model || defaultModel;
-            const configArgs = [];
-            if (useModel) {
-                configArgs.push('--config', `model="${useModel}"`);
-            }
-
-            const forcedReasoningEffort = resolveCodexForcedReasoningEffort(useModel);
-            if (forcedReasoningEffort) {
-                configArgs.push('--config', `model_reasoning_effort="${forcedReasoningEffort}"`);
-                console.log(
-                    `[codex] forcing model_reasoning_effort="${forcedReasoningEffort}"` +
-                    (useModel ? ` for ${useModel}` : '')
-                );
-            }
-
-            return [...configArgs, 'exec', '--skip-git-repo-check', prompt];
-        },
-        parseOutput: (stdout) => stdout.trim()
+        buildArgs: (prompt, model, defaultModel) => buildCodexCliArgs(prompt, model, defaultModel),
+        buildStreamArgs: (prompt, model, defaultModel) => buildCodexCliArgs(prompt, model, defaultModel, 'json'),
+        parseOutput: (stdout) => parseCodexJsonOutput(stdout)
     }
 };
 
@@ -599,29 +634,16 @@ async function checkToolAvailable(toolId) {
             };
         }
         const checkArgs = getCliCheckArgs(tool);
-        const invocation = getProcessInvocation(commandPath, checkArgs);
-        const result = spawnSync(invocation.command, invocation.args, {
+        const result = spawnSync(commandPath, checkArgs, {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf8',
             timeout: TOOL_CHECK_TIMEOUT_MS,
             env: { ...process.env, NO_COLOR: '1' },
-            shell: false,
+            shell: shouldUseShellForCommand(commandPath),
             windowsHide: true,
         });
 
         if (result.error) {
-            if (toolId === 'gemini' && result.error.code === 'ETIMEDOUT') {
-                console.warn(
-                    `[gemini] check command timed out after ${TOOL_CHECK_TIMEOUT_MS}ms; ` +
-                    `treating as available because executable is resolvable: ${commandPath}`
-                );
-                return {
-                    available: true,
-                    warning:
-                        `gemini check timed out after ${TOOL_CHECK_TIMEOUT_MS}ms; ` +
-                        `continuing with executable path ${commandPath}`
-                };
-            }
             return {
                 available: false,
                 error: `${tool.command} check failed: ${result.error.message}`
@@ -698,43 +720,20 @@ function getCodexCachedModelMetadata(modelId) {
     }) || null;
 }
 
-function pickLowestReasoningEffort(supportedEfforts) {
-    const normalizedSupported = Array.from(
-        new Set(
-            (Array.isArray(supportedEfforts) ? supportedEfforts : [])
-                .map(effort => normalizeModelId(effort))
-                .filter(Boolean)
-        )
-    );
-
-    if (normalizedSupported.length === 0) {
-        return '';
-    }
-    const supportedSet = new Set(normalizedSupported);
-    const order = ['low', 'medium', 'high', 'xhigh'];
-
-    for (const effort of order) {
-        if (supportedSet.has(effort)) {
-            return effort;
-        }
-    }
-
-    return normalizedSupported[0];
-}
-
 function resolveCodexForcedReasoningEffort(modelId) {
     const selectedModel = normalizeModelId(modelId || readCodexConfiguredModel());
-    if (!selectedModel) {
-        return 'medium';
-    }
-
-    const modelMetadata = getCodexCachedModelMetadata(selectedModel);
+    const modelMetadata = selectedModel ? getCodexCachedModelMetadata(selectedModel) : null;
     const supportedEfforts = (modelMetadata?.supported_reasoning_levels || [])
         .map(level => normalizeModelId(level?.effort))
         .filter(Boolean);
-
-    // "off" is not supported by Codex CLI models; use the lowest supported effort.
-    return pickLowestReasoningEffort(supportedEfforts) || 'medium';
+    const supportedSet = new Set(supportedEfforts);
+    const lowerModel = selectedModel.toLowerCase();
+    // gpt-5 계열 일부는 minimal/none 조합에서 web_search/tool 제약 오류가 발생.
+    if (lowerModel === 'gpt-5' || lowerModel.includes('gpt-5-codex')) return 'low';
+    if (supportedSet.has('none')) return 'none';
+    if (supportedSet.has('minimal')) return 'minimal';
+    // Prefer disabling reasoning for non-codex models even if metadata does not list "none".
+    return 'none';
 }
 
 function walkDirSafe(rootDir, result = [], maxFiles = 400) {
@@ -894,9 +893,61 @@ async function getModelsForTool(toolId, forceRefresh = false) {
  */
 const MAX_CONCURRENT_CLI = 5;
 let activeCLIProcesses = 0;
+const LYRICS_RESULT_CACHE_TTL_MS = 10 * 60 * 1000;
+const LYRICS_RESULT_CACHE_MAX = 200;
+const lyricsResultCache = new Map();
+const lyricsInflightRequests = new Map();
 
 function getActiveRequestCount() {
     return activeCLIProcesses;
+}
+
+function isLyricsWorkloadPrompt(prompt) {
+    const text = normalizeModelId(prompt).toLowerCase();
+    if (!text) return false;
+    return (
+        /^translate these \d+ lines of song lyrics/.test(text) ||
+        /^convert these \d+ lines of lyrics to pronunciation/.test(text)
+    );
+}
+
+function makeLyricsRequestKey(toolId, model, prompt) {
+    if (!isLyricsWorkloadPrompt(prompt)) return '';
+    return `${normalizeModelId(toolId)}::${normalizeModelId(model)}::${prompt}`;
+}
+
+function getCachedLyricsResult(cacheKey) {
+    if (!cacheKey) return '';
+    const cached = lyricsResultCache.get(cacheKey);
+    if (!cached) return '';
+    if (Date.now() - cached.ts > LYRICS_RESULT_CACHE_TTL_MS) {
+        lyricsResultCache.delete(cacheKey);
+        return '';
+    }
+    return cached.result || '';
+}
+
+function setCachedLyricsResult(cacheKey, result) {
+    if (!cacheKey || !result) return;
+    lyricsResultCache.set(cacheKey, { ts: Date.now(), result });
+    if (lyricsResultCache.size <= LYRICS_RESULT_CACHE_MAX) return;
+    const oldestKey = lyricsResultCache.keys().next().value;
+    if (oldestKey) lyricsResultCache.delete(oldestKey);
+}
+
+function getInflightLyricsRequest(cacheKey) {
+    if (!cacheKey) return null;
+    return lyricsInflightRequests.get(cacheKey) || null;
+}
+
+function setInflightLyricsRequest(cacheKey, promise) {
+    if (!cacheKey || !promise) return;
+    lyricsInflightRequests.set(cacheKey, promise);
+}
+
+function clearInflightLyricsRequest(cacheKey) {
+    if (!cacheKey) return;
+    lyricsInflightRequests.delete(cacheKey);
 }
 
 /**
@@ -936,12 +987,11 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
         console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
         console.log(`${'='.repeat(60)}`);
 
-        const invocation = getProcessInvocation(commandPath, args);
-        const proc = spawn(invocation.command, invocation.args, {
+        const proc = spawn(commandPath, args, {
             stdio: ['ignore', 'pipe', 'pipe'],
             cwd: os.tmpdir(),
             env: { ...process.env, NO_COLOR: '1' },
-            shell: false,
+            shell: shouldUseShellForCommand(commandPath),
             windowsHide: true,
         });
 
@@ -1002,11 +1052,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
                 console.log(`[${toolId}] SUCCESS - Response length: ${result.length} chars`);
                 resolve(result);
             } else {
-                const stderrPreview = normalizeModelId(stderr).slice(0, 400);
-                console.log(
-                    `[${toolId}] FAILED - Exit code: ${code}` +
-                    (stderrPreview ? `, stderr: ${stderrPreview}` : '')
-                );
+                console.log(`[${toolId}] FAILED - Exit code: ${code}`);
                 reject(new Error(stderr || `Process exited with code ${code}`));
             }
         });
@@ -1107,7 +1153,14 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         return;
     }
 
-    const args = tool.buildArgs(prompt, model, tool.defaultModel);
+    const buildArgsFn = typeof tool.buildStreamArgs === 'function' ? tool.buildStreamArgs : tool.buildArgs;
+    const args = buildArgsFn(prompt, model, tool.defaultModel);
+    const geminiJsonStreamEnabled =
+        toolId === 'gemini' &&
+        args.some((arg, i) => arg === '--output-format' && args[i + 1] === 'stream-json');
+    const codexJsonStreamEnabled =
+        toolId === 'codex' &&
+        args.includes('--json');
     const actualModel = model || tool.defaultModel || 'default';
 
     const promptPreview = prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt;
@@ -1118,18 +1171,61 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
     console.log(`${'='.repeat(60)}`);
 
-    const invocation = getProcessInvocation(commandPath, args);
-    const proc = spawn(invocation.command, invocation.args, {
+    const proc = spawn(commandPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         cwd: os.tmpdir(),
         env: { ...process.env, NO_COLOR: '1' },
-        shell: false,
+        shell: shouldUseShellForCommand(commandPath),
         windowsHide: true,
     });
 
     let stderr = '';
     let settled = false;
     let totalLength = 0;
+    let streamedChunkCount = 0;
+    let geminiJsonBuffer = '';
+    let codexJsonBuffer = '';
+
+    const flushGeminiStreamLine = (line) => {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) return;
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed?.type === 'message' && parsed?.role === 'assistant' && typeof parsed.content === 'string' && parsed.content) {
+                sendSSEChunk(res, parsed.content);
+                streamedChunkCount++;
+            }
+            if (parsed?.type === 'error') {
+                const errText = normalizeModelId(parsed?.error || parsed?.message || 'Gemini stream error');
+                if (errText) sendSSEError(res, errText);
+            }
+        } catch {
+            // Fallback: if a non-JSON line appears, forward it as plain text.
+            sendSSEChunk(res, trimmed + '\n');
+            streamedChunkCount++;
+        }
+    };
+
+    const flushCodexStreamLine = (line) => {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) return;
+        let parsed;
+        try {
+            parsed = JSON.parse(trimmed);
+        } catch {
+            // Ignore non-JSON noise for codex JSON stream mode.
+            return;
+        }
+        const chunk = extractCodexChunkFromEvent(parsed);
+        if (chunk) {
+            sendSSEChunk(res, chunk);
+            streamedChunkCount++;
+        }
+        if (parsed?.type === 'error') {
+            const errText = normalizeModelId(parsed?.error || parsed?.message || 'Codex stream error');
+            if (errText) sendSSEError(res, errText);
+        }
+    };
 
     const timer = setTimeout(() => {
         if (!settled) {
@@ -1154,7 +1250,26 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         if (settled) return;
         const text = data.toString();
         totalLength += text.length;
-        sendSSEChunk(res, text);
+        if (!geminiJsonStreamEnabled && !codexJsonStreamEnabled) {
+            sendSSEChunk(res, text);
+            streamedChunkCount++;
+            return;
+        }
+        if (geminiJsonStreamEnabled) {
+            geminiJsonBuffer += text;
+            const lines = geminiJsonBuffer.split(/\r?\n/);
+            geminiJsonBuffer = lines.pop() || '';
+            for (const line of lines) {
+                flushGeminiStreamLine(line);
+            }
+            return;
+        }
+        codexJsonBuffer += text;
+        const lines = codexJsonBuffer.split(/\r?\n/);
+        codexJsonBuffer = lines.pop() || '';
+        for (const line of lines) {
+            flushCodexStreamLine(line);
+        }
     });
 
     proc.stderr.on('data', (data) => {
@@ -1167,14 +1282,21 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         if (settled) return;
         settled = true;
         if (code !== 0) {
-            const stderrPreview = normalizeModelId(stderr).slice(0, 400);
-            console.log(
-                `[${toolId}] STREAM FAILED - Exit code: ${code}` +
-                (stderrPreview ? `, stderr: ${stderrPreview}` : '')
-            );
+            console.log(`[${toolId}] STREAM FAILED - Exit code: ${code}`);
             sendSSEError(res, stderr || `Process exited with code ${code}`);
         } else {
-            console.log(`[${toolId}] STREAM SUCCESS - Total: ${totalLength} chars`);
+            if (geminiJsonStreamEnabled && geminiJsonBuffer) {
+                flushGeminiStreamLine(geminiJsonBuffer);
+                geminiJsonBuffer = '';
+            }
+            if (codexJsonStreamEnabled && codexJsonBuffer) {
+                flushCodexStreamLine(codexJsonBuffer);
+                codexJsonBuffer = '';
+            }
+            console.log(
+                `[${toolId}] STREAM SUCCESS - Total: ${totalLength} chars` +
+                `, emitted chunks: ${streamedChunkCount}`
+            );
         }
         sendSSEDone(res);
     });
@@ -1332,8 +1454,34 @@ app.post('/generate', async (req, res) => {
     const effectiveTimeout = timeout
         ? Math.max(5000, Math.min(600000, Number(timeout) || DEFAULT_TIMEOUT_MS))
         : DEFAULT_TIMEOUT_MS;
+    const effectiveModel = requestedModel || '';
+    const lyricsRequestKey = makeLyricsRequestKey(tool, effectiveModel, prompt);
 
     if (streamEnabled) {
+        const cached = getCachedLyricsResult(lyricsRequestKey);
+        if (cached) {
+            console.log(`[API] Stream cache hit - tool: ${tool}, model: ${effectiveModel || 'default'}, prompt length: ${prompt.length}`);
+            setupSSE(res);
+            sendSSEChunk(res, cached);
+            sendSSEDone(res);
+            return;
+        }
+
+        const inflight = getInflightLyricsRequest(lyricsRequestKey);
+        if (inflight) {
+            console.log(`[API] Stream joined in-flight request - tool: ${tool}, model: ${effectiveModel || 'default'}, prompt length: ${prompt.length}`);
+            setupSSE(res);
+            try {
+                const sharedResult = await inflight;
+                sendSSEChunk(res, sharedResult);
+                sendSSEDone(res);
+            } catch (e) {
+                sendSSEError(res, e?.message || 'Shared request failed');
+                sendSSEDone(res);
+            }
+            return;
+        }
+
         console.log(`[API] Stream request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${requestedModel || 'default'}, prompt length: ${prompt.length}`);
         setupSSE(res);
         runToolStream(tool, prompt, requestedModel || '', effectiveTimeout, res);
@@ -1349,7 +1497,41 @@ app.post('/generate', async (req, res) => {
     try {
         console.log(`[API] Generate request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${requestedModel || 'default'}, prompt length: ${prompt.length}`);
         const startTime = Date.now();
-        const result = await runTool(tool, prompt, requestedModel || '', effectiveTimeout, ac.signal);
+        const cached = getCachedLyricsResult(lyricsRequestKey);
+        if (cached) {
+            const elapsed = Date.now() - startTime;
+            console.log(`[API] Cache hit - tool: ${tool}, model: ${effectiveModel || 'default'}, prompt length: ${prompt.length}`);
+            if (!res.writableEnded) {
+                res.json({
+                    success: true,
+                    result: cached,
+                    tool,
+                    mode: CLI_TOOLS[tool]?.mode,
+                    model: requestedModel || CLI_TOOLS[tool]?.defaultModel || 'default',
+                    elapsed_ms: elapsed,
+                    cached: true
+                });
+            }
+            return;
+        }
+
+        let sharedPromise = getInflightLyricsRequest(lyricsRequestKey);
+        if (!sharedPromise) {
+            sharedPromise = runTool(
+                tool,
+                prompt,
+                effectiveModel,
+                effectiveTimeout,
+                lyricsRequestKey ? null : ac.signal
+            );
+            setInflightLyricsRequest(lyricsRequestKey, sharedPromise);
+        } else {
+            console.log(`[API] Joined in-flight request - tool: ${tool}, model: ${effectiveModel || 'default'}, prompt length: ${prompt.length}`);
+        }
+
+        const result = await sharedPromise;
+        clearInflightLyricsRequest(lyricsRequestKey);
+        setCachedLyricsResult(lyricsRequestKey, result);
         const elapsed = Date.now() - startTime;
         console.log(`[API] Completed in ${elapsed}ms`);
         if (!res.writableEnded) {
@@ -1359,10 +1541,12 @@ app.post('/generate', async (req, res) => {
                 tool,
                 mode: CLI_TOOLS[tool]?.mode,
                 model: requestedModel || CLI_TOOLS[tool]?.defaultModel || 'default',
-                elapsed_ms: elapsed
+                elapsed_ms: elapsed,
+                cached: false
             });
         }
     } catch (e) {
+        clearInflightLyricsRequest(lyricsRequestKey);
         console.error(`[API] Error:`, e.message);
         if (!res.writableEnded) {
             res.status(500).json({ error: e.message });
@@ -1487,10 +1671,7 @@ app.post('/update', async (req, res) => {
     // 허용된 target만 수락 (path traversal 방지)
     const ALLOWED_TARGETS = new Set([
         'addons', 'proxy', 'all',
-        'Addon_AI_CLI_Provider.js',
-        'Addon_AI_CLI_ClaudeCode.js',
-        'Addon_AI_CLI_CodexCLI.js',
-        'Addon_AI_CLI_GeminiCLI.js'
+        'Addon_AI_CLI_Provider.js'
     ]);
     if (!ALLOWED_TARGETS.has(target)) {
         return res.status(400).json({ error: `Invalid target: ${target}` });
@@ -1562,14 +1743,13 @@ app.post('/update', async (req, res) => {
                 });
             } else {
                 console.log(`[update] Running dependency install: ${npmCommandPath} install`);
-                const npmInvocation = getProcessInvocation(npmCommandPath, ['install']);
-                const npmInstallResult = spawnSync(npmInvocation.command, npmInvocation.args, {
+                const npmInstallResult = spawnSync(npmCommandPath, ['install'], {
                     cwd: __dirname,
                     stdio: ['ignore', 'pipe', 'pipe'],
                     encoding: 'utf8',
                     timeout: 180000,
                     env: { ...process.env },
-                    shell: false,
+                    shell: shouldUseShellForCommand(npmCommandPath),
                     windowsHide: true,
                 });
 
@@ -1700,7 +1880,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Start Server
 // ============================================
 
-const server = app.listen(PORT, '127.0.0.1', () => {
+app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n🚀 ivLyrics CLI Proxy Server v${LOCAL_VERSION}`);
     console.log(`   Running on http://127.0.0.1:${PORT} (localhost only)`);
     console.log(`   Gemini mode: CLI spawn`);
@@ -1740,14 +1920,4 @@ const server = app.listen(PORT, '127.0.0.1', () => {
             console.log('   Run GET /updates for details\n');
         }
     }).catch(() => {});
-});
-
-server.on('error', (err) => {
-    if (err?.code === 'EADDRINUSE') {
-        console.error(`[server] Port ${PORT} is already in use on 127.0.0.1.`);
-        console.error('[server] Another proxy instance is already running. Reusing existing process.');
-        process.exit(0);
-    }
-    console.error(`[server] Failed to start: ${err?.message || err}`);
-    process.exit(1);
 });

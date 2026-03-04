@@ -15,10 +15,12 @@ CLI_PROXY_DIR=""
 
 ADDONS="Addon_AI_CLI_Provider.js"
 ADDON_LABELS="AI CLI Provider (Claude + Gemini + Codex)"
+LEGACY_ADDONS="Addon_AI_CLI_ClaudeCode.js Addon_AI_CLI_CodexCLI.js Addon_AI_CLI_GeminiCLI.js"
 PROXY_FILES="server.js package.json README.md spotify-with-proxy.sh spotify-with-proxy.ps1"
 NO_NPM_INSTALL=0
 NO_APPLY=0
 DID_ADDON_INSTALL=0
+LEGACY_CLEANUP_DONE=0
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -224,6 +226,38 @@ update_addon_source() {
     mv "$tmp" "$ADDON_SOURCES"
 }
 
+remove_addon_source_entry() {
+    local filename="$1"
+    [ -f "$ADDON_SOURCES" ] || return 0
+    if ! grep -q "\"$filename\"" "$ADDON_SOURCES"; then
+        return 0
+    fi
+
+    local tmp="${ADDON_SOURCES}.tmp"
+    awk -v key="$filename" '
+    BEGIN { n=0 }
+    /"[^"]*"[[:space:]]*:[[:space:]]*"[^"]*"/ {
+        s = $0
+        gsub(/^[^"]*"/, "", s); gsub(/".*$/, "", s); k = s
+        s = $0; sub(/^[^:]*:[[:space:]]*"/, "", s); gsub(/".*$/, "", s); v = s
+        if (k != key) { keys[n] = k; vals[n] = v; n++ }
+        next
+    }
+    END {
+        print "{"
+        for (i = 0; i < n; i++) {
+            printf "    \"%s\": \"%s\"", keys[i], vals[i]
+            if (i < n - 1) printf ","
+            printf "\n"
+        }
+        print "}"
+    }
+    ' "$ADDON_SOURCES" > "$tmp"
+    mv "$tmp" "$ADDON_SOURCES"
+    ok "Removed source entry: $filename"
+    DID_ADDON_INSTALL=1
+}
+
 # ── manifest.json ────────────────────────────────────────────────────────────
 
 add_manifest_entry() {
@@ -234,19 +268,92 @@ add_manifest_entry() {
         return
     fi
 
-    # Insert entry after the "subfiles_extension": [ line
-    # Using awk for cross-platform compatibility (sed -a differs between macOS/GNU)
+    # Insert entry at the top of subfiles_extension array.
+    # Handles both non-empty arrays and empty arrays without creating trailing commas.
     local tmp="${MANIFEST}.tmp"
     awk -v new_entry="$entry" '
         /"subfiles_extension"[[:space:]]*:[[:space:]]*\[/ {
             print
-            printf "        \"%s\",\n", new_entry
+            in_array = 1
+            pending_insert = 1
             next
+        }
+        in_array && pending_insert {
+            if ($0 ~ /^[[:space:]]*$/) {
+                print
+                next
+            }
+            if ($0 ~ /^[[:space:]]*\]/) {
+                printf "        \"%s\"\n", new_entry
+                print
+                in_array = 0
+                pending_insert = 0
+                next
+            }
+            printf "        \"%s\",\n", new_entry
+            print
+            pending_insert = 0
+            next
+        }
+        in_array && $0 ~ /^[[:space:]]*\]/ {
+            in_array = 0
         }
         { print }
     ' "$MANIFEST" > "$tmp"
     mv "$tmp" "$MANIFEST"
     ok "Registered \"$entry\" in manifest.json"
+}
+
+remove_manifest_entry() {
+    local entry="$1"
+    [ -f "$MANIFEST" ] || return 0
+    if ! grep -q "\"$entry\"" "$MANIFEST"; then
+        return 0
+    fi
+
+    local tmp="${MANIFEST}.tmp"
+    awk -v old_entry="$entry" '
+        /"subfiles_extension"[[:space:]]*:[[:space:]]*\[/ {
+            print
+            in_array = 1
+            next
+        }
+        in_array {
+            if ($0 ~ /^[[:space:]]*\]/) {
+                in_array = 0
+                print
+                next
+            }
+            line = $0
+            gsub(/^[[:space:]]+/, "", line)
+            if (line ~ "^\"" old_entry "\"[[:space:]]*,?[[:space:]]*$") {
+                next
+            }
+        }
+        { print }
+    ' "$MANIFEST" > "$tmp"
+    mv "$tmp" "$MANIFEST"
+    ok "Removed \"$entry\" from manifest.json"
+    DID_ADDON_INSTALL=1
+}
+
+cleanup_legacy_addons_if_present() {
+    if [ "$LEGACY_CLEANUP_DONE" -eq 1 ]; then
+        return 0
+    fi
+    LEGACY_CLEANUP_DONE=1
+
+    local legacy
+    for legacy in $LEGACY_ADDONS; do
+        local legacy_path="$IVLYRICS_APP/$legacy"
+        if [ -f "$legacy_path" ]; then
+            rm -f "$legacy_path"
+            ok "Removed legacy addon file: $legacy"
+            DID_ADDON_INSTALL=1
+        fi
+        remove_addon_source_entry "$legacy"
+        remove_manifest_entry "$legacy"
+    done
 }
 
 # ── install single addon ────────────────────────────────────────────────────
@@ -261,6 +368,10 @@ install_addon() {
     if [ "${filename%.js}" = "$filename" ]; then
         err "URL must point to a .js file: $url"
         return 1
+    fi
+
+    if [ "$filename" = "Addon_AI_CLI_Provider.js" ]; then
+        cleanup_legacy_addons_if_present
     fi
 
     local dest="$IVLYRICS_APP/$filename"
@@ -339,7 +450,7 @@ read_remote_proxy_version() {
         return 0
     fi
     awk '
-        /"proxy"[[:space:]]*:/ { in_proxy = 1; next }
+        /"proxy"[[:space:]]*:[[:space:]]*{/ { in_proxy = 1 }
         in_proxy && /"version"[[:space:]]*:[[:space:]]*"/ {
             s = $0
             sub(/.*"version"[[:space:]]*:[[:space:]]*"/, "", s)

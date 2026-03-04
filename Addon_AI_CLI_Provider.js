@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 2.2.5
+ * @version 2.2.6
  */
 
 (() => {
@@ -541,7 +541,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description: resolvedDescription,
-            version: '2.2.5',
+            version: '2.2.6',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -659,9 +659,11 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             return isTransportRetryableError(message) && !isDeterministicProxyError(message);
         }
 
-        async function callProxyStream(prompt, maxRetries = 1) {
+        async function callProxyStream(prompt, options = {}) {
             const proxyUrl = getProxyUrl();
             const model = getSelectedModel();
+            const maxRetries = Number.isFinite(options?.maxRetries) ? options.maxRetries : 1;
+            const onChunk = typeof options?.onChunk === 'function' ? options.onChunk : null;
             let lastError = null;
 
             for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -688,6 +690,17 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     const decoder = new TextDecoder();
                     let accumulated = '';
                     let buffer = '';
+                    const appendChunk = (chunk) => {
+                        if (!chunk) return;
+                        accumulated += chunk;
+                        if (onChunk) {
+                            try {
+                                onChunk(chunk, accumulated);
+                            } catch {
+                                // ignore progress callback errors
+                            }
+                        }
+                    };
 
                     while (true) {
                         const { done, value } = await reader.read();
@@ -698,7 +711,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     try {
                                         const parsed = JSON.parse(payload);
                                         if (parsed.error) throw new Error(parsed.error);
-                                        if (parsed.chunk) accumulated += parsed.chunk;
+                                        appendChunk(parsed.chunk);
                                     } catch (e) {
                                         if (!(e instanceof SyntaxError)) throw e;
                                     }
@@ -718,7 +731,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             try {
                                 const parsed = JSON.parse(payload);
                                 if (parsed.error) throw new Error(parsed.error);
-                                if (parsed.chunk) accumulated += parsed.chunk;
+                                appendChunk(parsed.chunk);
                             } catch (e) {
                                 if (!(e instanceof SyntaxError)) throw e;
                             }
@@ -786,9 +799,16 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             throw lastError || new Error(`${LOG_TAG} All retries exhausted`);
         }
 
-        async function callProxy(prompt, maxRetries = 1) {
+        async function callProxy(prompt, options = {}) {
+            const maxRetries = Number.isFinite(options?.maxRetries) ? options.maxRetries : 1;
+            const useStream = options?.stream === true;
+
+            if (!useStream) {
+                return await callProxyLegacy(prompt, maxRetries);
+            }
+
             try {
-                return await callProxyStream(prompt, maxRetries);
+                return await callProxyStream(prompt, { maxRetries, onChunk: options?.onChunk });
             } catch (e) {
                 const message = getErrorMessage(e);
                 if (!shouldFallbackToLegacy(message)) {
@@ -806,7 +826,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 console.log(`${LOG_TAG} Initialized (v${ADDON_INFO.version})`);
                 const proxyUrl = getProxyUrl();
                 checkAddonUpdate(id, proxyUrl).catch(() => {});
-                maybeAutoUpdateProxy(id, proxyUrl).catch(() => {});
+                // Keep local custom proxy behavior stable; do not auto-overwrite proxy files.
             },
 
             async testConnection() {
@@ -963,18 +983,21 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     }, []);
 
                     const isWindows = /Windows/i.test(navigator.userAgent || '');
-                    const setupCommand = isWindows
+                    const startCommand = isWindows
                         ? '& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -StartProxy -NoApply'
                         : 'curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --start-proxy --no-apply';
+                    const installCommand = isWindows
+                        ? '& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy -NoApply'
+                        : 'curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy --no-apply';
 
                     const handleCopyCommand = useCallback(async () => {
                         try {
-                            await navigator.clipboard.writeText(setupCommand);
+                            await navigator.clipboard.writeText(startCommand);
                             Spicetify.showNotification?.('Command copied to clipboard!');
                         } catch (e) {
                             console.error('Failed to copy:', e);
                         }
-                    }, [setupCommand]);
+                    }, [startCommand]);
 
                     return React.createElement('div', { className: 'ai-addon-settings' },
                         React.createElement('div', {
@@ -1002,7 +1025,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                         userSelect: 'all',
                                         cursor: 'text'
                                     }
-                                }, setupCommand),
+                                }, startCommand),
                                 React.createElement('button', {
                                     onClick: handleCopyCommand,
                                     className: 'ai-addon-btn-secondary',
@@ -1017,8 +1040,20 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     lineHeight: 1.45
                                 }
                             },
-                                React.createElement('div', null, 'Run the command in a terminal. Keep that terminal open while using ivLyrics (proxy must stay running).'),
-                                React.createElement('div', null, 'Marketplace install adds only the addon file. Run the command once to install/update/start cli-proxy.'),
+                                React.createElement('div', null, 'Run the start command in a terminal. Keep that terminal open while using ivLyrics (proxy must stay running).'),
+                                React.createElement('div', null, 'Proxy-only install/update command:'),
+                                React.createElement('code', {
+                                    style: {
+                                        display: 'block',
+                                        fontSize: '11px',
+                                        marginTop: '4px',
+                                        padding: '6px 10px',
+                                        backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                                        borderRadius: '4px',
+                                        userSelect: 'all',
+                                        cursor: 'text'
+                                    }
+                                }, installCommand),
                                 React.createElement('div', null, 'Marketplace remove cleans cli-proxy only when proxy is running at removal time.'),
                                 React.createElement('div', null, 'If proxy folder remains, run uninstall script with -Proxy or --proxy.')
                             )
@@ -1105,7 +1140,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 };
             },
 
-            async translateLyrics({ text, lang, wantSmartPhonetic }) {
+            async translateLyrics({ text, lang, wantSmartPhonetic, onProgress }) {
                 if (!text?.trim()) throw new Error('No text provided');
                 const expectedLineCount = text.split('\n').length;
                 const prompt = wantSmartPhonetic
