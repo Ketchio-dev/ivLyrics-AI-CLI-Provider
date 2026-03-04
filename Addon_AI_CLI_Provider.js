@@ -860,6 +860,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     const [testStatus, setTestStatus] = useState('');
                     const [updateStatus, setUpdateStatus] = useState('');
                     const [hasUpdates, setHasUpdates] = useState(false);
+                    const [activeTab, setActiveTab] = useState('start');
 
                     const refreshProxyStatus = useCallback(async () => {
                         const MAX_RETRIES = 3;
@@ -1016,6 +1017,17 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     const handleCopyCommand = useCallback(() => handleCopy(startCommand), [startCommand, handleCopy]);
                     const handleCopyInstall = useCallback(() => handleCopy(installCommand), [installCommand, handleCopy]);
 
+                    const codeBlockStyle = {
+                        fontSize: '11px',
+                        padding: '6px 10px',
+                        backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                        borderRadius: '4px',
+                        flex: '1',
+                        minWidth: '200px',
+                        userSelect: 'all',
+                        cursor: 'text'
+                    };
+
                     return React.createElement('div', { className: 'ai-addon-settings' },
                         React.createElement('div', {
                             className: 'ai-addon-notice',
@@ -1027,65 +1039,47 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                 fontSize: '12px'
                             }
                         },
-                            React.createElement('strong', null, 'Setup / Start Proxy:'),
+                            React.createElement('strong', {
+                                title: 'Marketplace remove cleans cli-proxy only when proxy is running at removal time. If proxy folder remains, run uninstall script with -Proxy or --proxy.'
+                            }, 'Setup / Start Proxy:'),
                             React.createElement('div', {
-                                style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }
+                                style: { display: 'flex', gap: '16px', marginBottom: '10px', marginTop: '8px' }
                             },
-                                React.createElement('code', {
+                                React.createElement('span', {
+                                    onClick: function () { setActiveTab('start'); },
+                                    title: 'Run the start command in a terminal. Keep that terminal open while using ivLyrics (proxy must stay running).',
                                     style: {
-                                        fontSize: '11px',
-                                        padding: '6px 10px',
-                                        backgroundColor: 'rgba(0, 0, 0, 0.3)',
-                                        borderRadius: '4px',
-                                        flex: '1',
-                                        minWidth: '200px',
-                                        userSelect: 'all',
-                                        cursor: 'text'
+                                        cursor: 'pointer',
+                                        paddingBottom: '4px',
+                                        borderBottom: activeTab === 'start' ? '2px solid currentColor' : 'none',
+                                        opacity: activeTab === 'start' ? 1 : 0.6
                                     }
-                                }, startCommand),
+                                }, 'Start Proxy'),
+                                React.createElement('span', {
+                                    onClick: function () { setActiveTab('install'); },
+                                    style: {
+                                        cursor: 'pointer',
+                                        paddingBottom: '4px',
+                                        borderBottom: activeTab === 'install' ? '2px solid currentColor' : 'none',
+                                        opacity: activeTab === 'install' ? 1 : 0.6
+                                    }
+                                }, 'Install Only')
+                            ),
+                            React.createElement('div', {
+                                style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }
+                            },
+                                React.createElement('code', { style: codeBlockStyle },
+                                    activeTab === 'start' ? startCommand : installCommand),
                                 React.createElement('button', {
-                                    onClick: handleCopyCommand,
+                                    onClick: activeTab === 'start' ? handleCopyCommand : handleCopyInstall,
                                     className: 'ai-addon-btn-secondary',
                                     style: { padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' },
                                     title: 'Copy command'
                                 }, '📋 Copy')
-                            ),
-                            React.createElement('div', {
-                                style: {
-                                    marginTop: '8px',
-                                    opacity: 0.9,
-                                    lineHeight: 1.45
-                                }
-                            },
-                                React.createElement('div', null, 'Run the start command in a terminal. Keep that terminal open while using ivLyrics (proxy must stay running).'),
-                                React.createElement('div', null, 'Proxy-only install/update command:'),
-                                React.createElement('div', {
-                                    style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }
-                                },
-                                    React.createElement('code', {
-                                        style: {
-                                            fontSize: '11px',
-                                            padding: '6px 10px',
-                                            backgroundColor: 'rgba(0, 0, 0, 0.3)',
-                                            borderRadius: '4px',
-                                            flex: '1',
-                                            minWidth: '200px',
-                                            userSelect: 'all',
-                                            cursor: 'text'
-                                        }
-                                    }, installCommand),
-                                    React.createElement('button', {
-                                        onClick: handleCopyInstall,
-                                        className: 'ai-addon-btn-secondary',
-                                        style: { padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' },
-                                        title: 'Copy command'
-                                    }, '📋 Copy')
-                                ),
-                                React.createElement('div', null, 'Marketplace remove cleans cli-proxy only when proxy is running at removal time.'),
-                                React.createElement('div', null, 'If proxy folder remains, run uninstall script with -Proxy or --proxy.')
                             )
                         ),
 
+                        React.createElement('div', { style: { borderTop: '1px solid rgba(255,255,255,0.1)', margin: '16px 0' } }),
                         React.createElement('div', { className: 'ai-addon-setting' },
                             React.createElement('label', null, 'Proxy Server URL'),
                             React.createElement('div', { className: 'ai-addon-input-group' },
@@ -1104,9 +1098,22 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             React.createElement('small', null, 'Default: http://127.0.0.1:19284'),
                             React.createElement('small', {
                                 className: `ai-addon-test-status ${proxyStatus.state === 'running' ? 'success' : proxyStatus.state === 'error' ? 'error' : ''}`
-                            }, `Status: ${proxyStatus.message}`)
+                            },
+                                (proxyStatus.state === 'running' || proxyStatus.state === 'error' || proxyStatus.state === 'checking') && React.createElement('span', {
+                                    style: {
+                                        display: 'inline-block',
+                                        width: '8px',
+                                        height: '8px',
+                                        borderRadius: '50%',
+                                        backgroundColor: proxyStatus.state === 'running' ? '#1db954' : proxyStatus.state === 'error' ? '#e74c3c' : '#f39c12',
+                                        marginRight: '6px'
+                                    }
+                                }),
+                                `Status: ${proxyStatus.message}`
+                            )
                         ),
 
+                        React.createElement('div', { style: { borderTop: '1px solid rgba(255,255,255,0.1)', margin: '16px 0' } }),
                         React.createElement('div', { className: 'ai-addon-setting' },
                             React.createElement('label', null, 'Model'),
                             React.createElement('div', { className: 'ai-addon-input-group' },
@@ -1138,6 +1145,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             )
                         ),
 
+                        React.createElement('div', { style: { borderTop: '1px solid rgba(255,255,255,0.1)', margin: '16px 0' } }),
                         React.createElement('div', { className: 'ai-addon-setting' },
                             React.createElement('button', {
                                 onClick: handleTest,
@@ -1145,9 +1153,22 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             }, 'Test Connection'),
                             testStatus && React.createElement('span', {
                                 className: `ai-addon-test-status ${testStatus.startsWith('✓') ? 'success' : testStatus.startsWith('✗') ? 'error' : ''}`
-                            }, testStatus)
+                            },
+                                (testStatus.startsWith('✓') || testStatus.startsWith('✗')) && React.createElement('span', {
+                                    style: {
+                                        display: 'inline-block',
+                                        width: '8px',
+                                        height: '8px',
+                                        borderRadius: '50%',
+                                        backgroundColor: testStatus.startsWith('✓') ? '#1db954' : '#e74c3c',
+                                        marginRight: '6px'
+                                    }
+                                }),
+                                testStatus
+                            )
                         ),
 
+                        React.createElement('div', { style: { borderTop: '1px solid rgba(255,255,255,0.1)', margin: '16px 0' } }),
                         React.createElement('div', { className: 'ai-addon-setting' },
                             React.createElement('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
                                 React.createElement('button', {
@@ -1161,7 +1182,19 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             ),
                             updateStatus && React.createElement('span', {
                                 className: `ai-addon-test-status ${updateStatus.startsWith('✓') ? 'success' : updateStatus.startsWith('✗') ? 'error' : ''}`
-                            }, updateStatus)
+                            },
+                                (updateStatus.startsWith('✓') || updateStatus.startsWith('✗')) && React.createElement('span', {
+                                    style: {
+                                        display: 'inline-block',
+                                        width: '8px',
+                                        height: '8px',
+                                        borderRadius: '50%',
+                                        backgroundColor: updateStatus.startsWith('✓') ? '#1db954' : '#e74c3c',
+                                        marginRight: '6px'
+                                    }
+                                }),
+                                updateStatus
+                            )
                         )
                     );
                 };
