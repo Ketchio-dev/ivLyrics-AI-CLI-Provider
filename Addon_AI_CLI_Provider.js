@@ -984,10 +984,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                     const isWindows = /Windows/i.test(navigator.userAgent || '');
                     const startCommand = isWindows
-                        ? '& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -StartProxy -NoApply'
+                        ? '$u = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)"; & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache" } $u).Content)) -StartProxy -NoApply'
                         : 'curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --start-proxy --no-apply';
                     const installCommand = isWindows
-                        ? '& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Proxy -NoApply'
+                        ? '$u = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)"; & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache" } $u).Content)) -Proxy -NoApply'
                         : 'curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy --no-apply';
 
                     const handleCopyCommand = useCallback(async () => {

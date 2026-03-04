@@ -12,7 +12,8 @@ AI CLI Provider addons for [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics).
 ### Windows (PowerShell, full install: addons + proxy)
 
 ```powershell
-& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -Full
+$u = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)"
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache" } $u).Content)) -Full
 ```
 
 ### macOS / Linux (full install: addons + proxy)
@@ -26,7 +27,8 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 
 Windows:
 ```powershell
-& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/uninstall.ps1").Content)) -Full
+$u = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/uninstall.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)"
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache" } $u).Content)) -Full
 ```
 
 macOS / Linux:
@@ -47,7 +49,8 @@ curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provide
 curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --start-proxy --no-apply
 
 # Windows PowerShell
-& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1").Content)) -StartProxy -NoApply
+$u = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)"
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache" } $u).Content)) -StartProxy -NoApply
 ```
 
 Windows note:
