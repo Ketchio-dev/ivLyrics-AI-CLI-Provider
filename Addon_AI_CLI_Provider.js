@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 1.1.0
+ * @version 3.0.0
  */
 
 (() => {
@@ -14,7 +14,7 @@
     }
 
     try {
-    const DEFAULT_PROXY_URL = 'http://localhost:19284';
+    const DEFAULT_PROXY_URL = 'http://127.0.0.1:19284';
     const ADDON_UPDATE_CHECK_TTL = 3600000;
     const AUTO_PROXY_UPDATE_COOLDOWN_MS = 15 * 60 * 1000;
     const AUTO_PROXY_UPDATE_STATE_KEY = '__ivLyricsCliProviderAutoProxyUpdateState';
@@ -541,7 +541,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description: resolvedDescription,
-            version: '1.1.0',
+            version: '3.0.0',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -1087,7 +1087,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     title: 'Check proxy status'
                                 }, 'Check')
                             ),
-                            React.createElement('small', null, 'Default: http://localhost:19284'),
+                            React.createElement('small', null, 'Default: http://127.0.0.1:19284'),
                             React.createElement('small', {
                                 className: `ai-addon-test-status ${proxyStatus.state === 'running' ? 'success' : proxyStatus.state === 'error' ? 'error' : ''}`
                             }, `Status: ${proxyStatus.message}`)
