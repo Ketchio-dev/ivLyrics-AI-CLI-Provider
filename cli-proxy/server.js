@@ -701,13 +701,14 @@ async function checkToolAvailable(toolId) {
                     `Install: ${tool.installUrl} — then ensure it's in your PATH and restart Spotify/terminal.`
             };
         }
-        const checkArgs = getCliCheckArgs(tool);
+        const useShell = shouldUseShellForCommand(commandPath);
+        const checkArgs = quoteArgsForShell(getCliCheckArgs(tool), useShell);
         const result = spawnSync(commandPath, checkArgs, {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf8',
             timeout: TOOL_CHECK_TIMEOUT_MS,
             env: { ...process.env, NO_COLOR: '1' },
-            shell: shouldUseShellForCommand(commandPath),
+            shell: useShell,
             windowsHide: true,
         });
 
@@ -1814,13 +1815,14 @@ app.post('/update', async (req, res) => {
                 });
             } else {
                 console.log(`[update] Running dependency install: ${npmCommandPath} install`);
-                const npmInstallResult = spawnSync(npmCommandPath, ['install'], {
+                const npmUseShell = shouldUseShellForCommand(npmCommandPath);
+                const npmInstallResult = spawnSync(npmCommandPath, quoteArgsForShell(['install'], npmUseShell), {
                     cwd: __dirname,
                     stdio: ['ignore', 'pipe', 'pipe'],
                     encoding: 'utf8',
                     timeout: 180000,
                     env: { ...process.env },
-                    shell: shouldUseShellForCommand(npmCommandPath),
+                    shell: npmUseShell,
                     windowsHide: true,
                 });
 
