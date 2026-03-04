@@ -1000,13 +1000,27 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
         console.log(`${'='.repeat(60)}`);
 
         const useShell = shouldUseShellForCommand(commandPath);
-        const proc = spawn(commandPath, quoteArgsForShell(args, useShell), {
-            stdio: ['ignore', 'pipe', 'pipe'],
+        // On Windows, cmd.exe cannot handle newlines in arguments.
+        // Pipe multi-line prompts via stdin instead.
+        let stdinPrompt = null;
+        let spawnArgs;
+        if (useShell && args.length > 0 && /\n/.test(args[args.length - 1])) {
+            stdinPrompt = args[args.length - 1];
+            spawnArgs = quoteArgsForShell(args.slice(0, -1), useShell);
+        } else {
+            spawnArgs = quoteArgsForShell(args, useShell);
+        }
+        const proc = spawn(commandPath, spawnArgs, {
+            stdio: [stdinPrompt ? 'pipe' : 'ignore', 'pipe', 'pipe'],
             cwd: os.tmpdir(),
             env: { ...process.env, NO_COLOR: '1' },
             shell: useShell,
             windowsHide: true,
         });
+        if (stdinPrompt) {
+            proc.stdin.write(stdinPrompt);
+            proc.stdin.end();
+        }
 
         let stdout = '';
         let stderr = '';
@@ -1185,13 +1199,25 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     console.log(`${'='.repeat(60)}`);
 
     const useShell = shouldUseShellForCommand(commandPath);
-    const proc = spawn(commandPath, quoteArgsForShell(args, useShell), {
-        stdio: ['ignore', 'pipe', 'pipe'],
+    let stdinPrompt = null;
+    let spawnArgs;
+    if (useShell && args.length > 0 && /\n/.test(args[args.length - 1])) {
+        stdinPrompt = args[args.length - 1];
+        spawnArgs = quoteArgsForShell(args.slice(0, -1), useShell);
+    } else {
+        spawnArgs = quoteArgsForShell(args, useShell);
+    }
+    const proc = spawn(commandPath, spawnArgs, {
+        stdio: [stdinPrompt ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         cwd: os.tmpdir(),
         env: { ...process.env, NO_COLOR: '1' },
         shell: useShell,
         windowsHide: true,
     });
+    if (stdinPrompt) {
+        proc.stdin.write(stdinPrompt);
+        proc.stdin.end();
+    }
 
     let stderr = '';
     let settled = false;
