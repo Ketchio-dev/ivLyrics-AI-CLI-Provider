@@ -990,14 +990,16 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         ? '$u = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)"; & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache"; "Pragma" = "no-cache" } $u).Content)) -Proxy -NoApply'
                         : 'curl -fsSL https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/install.sh | bash -s -- --proxy --no-apply';
 
-                    const handleCopyCommand = useCallback(async () => {
+                    const handleCopy = useCallback(async (text) => {
                         try {
-                            await navigator.clipboard.writeText(startCommand);
-                            Spicetify.showNotification?.('Command copied to clipboard!');
+                            await navigator.clipboard.writeText(text);
+                            Spicetify.showNotification?.('Copied!');
                         } catch (e) {
                             console.error('Failed to copy:', e);
                         }
-                    }, [startCommand]);
+                    }, []);
+                    const handleCopyCommand = useCallback(() => handleCopy(startCommand), [startCommand, handleCopy]);
+                    const handleCopyInstall = useCallback(() => handleCopy(installCommand), [installCommand, handleCopy]);
 
                     return React.createElement('div', { className: 'ai-addon-settings' },
                         React.createElement('div', {
@@ -1042,18 +1044,28 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             },
                                 React.createElement('div', null, 'Run the start command in a terminal. Keep that terminal open while using ivLyrics (proxy must stay running).'),
                                 React.createElement('div', null, 'Proxy-only install/update command:'),
-                                React.createElement('code', {
-                                    style: {
-                                        display: 'block',
-                                        fontSize: '11px',
-                                        marginTop: '4px',
-                                        padding: '6px 10px',
-                                        backgroundColor: 'rgba(0, 0, 0, 0.3)',
-                                        borderRadius: '4px',
-                                        userSelect: 'all',
-                                        cursor: 'text'
-                                    }
-                                }, installCommand),
+                                React.createElement('div', {
+                                    style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }
+                                },
+                                    React.createElement('code', {
+                                        style: {
+                                            fontSize: '11px',
+                                            padding: '6px 10px',
+                                            backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                                            borderRadius: '4px',
+                                            flex: '1',
+                                            minWidth: '200px',
+                                            userSelect: 'all',
+                                            cursor: 'text'
+                                        }
+                                    }, installCommand),
+                                    React.createElement('button', {
+                                        onClick: handleCopyInstall,
+                                        className: 'ai-addon-btn-secondary',
+                                        style: { padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' },
+                                        title: 'Copy command'
+                                    }, '📋 Copy')
+                                ),
                                 React.createElement('div', null, 'Marketplace remove cleans cli-proxy only when proxy is running at removal time.'),
                                 React.createElement('div', null, 'If proxy folder remains, run uninstall script with -Proxy or --proxy.')
                             )
