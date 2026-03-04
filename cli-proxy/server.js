@@ -96,7 +96,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '2.2.7';
+const LOCAL_VERSION = '1.0.0';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -419,6 +419,15 @@ function shouldUseShellForCommand(commandPath) {
     if (process.platform !== 'win32') return false;
     const lower = String(commandPath || '').toLowerCase();
     return lower.endsWith('.cmd') || lower.endsWith('.bat');
+}
+
+/**
+ * On Windows with shell: true, spawn concatenates args without escaping.
+ * Wrap args containing whitespace in double quotes so cmd.exe keeps them intact.
+ */
+function quoteArgsForShell(args, useShell) {
+    if (!useShell) return args;
+    return args.map(a => /\s/.test(a) ? `"${a}"` : a);
 }
 
 function getCliCheckArgs(tool) {
@@ -987,11 +996,12 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
         console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
         console.log(`${'='.repeat(60)}`);
 
-        const proc = spawn(commandPath, args, {
+        const useShell = shouldUseShellForCommand(commandPath);
+        const proc = spawn(commandPath, quoteArgsForShell(args, useShell), {
             stdio: ['ignore', 'pipe', 'pipe'],
             cwd: os.tmpdir(),
             env: { ...process.env, NO_COLOR: '1' },
-            shell: shouldUseShellForCommand(commandPath),
+            shell: useShell,
             windowsHide: true,
         });
 
@@ -1171,11 +1181,12 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
     console.log(`${'='.repeat(60)}`);
 
-    const proc = spawn(commandPath, args, {
+    const useShell = shouldUseShellForCommand(commandPath);
+    const proc = spawn(commandPath, quoteArgsForShell(args, useShell), {
         stdio: ['ignore', 'pipe', 'pipe'],
         cwd: os.tmpdir(),
         env: { ...process.env, NO_COLOR: '1' },
-        shell: shouldUseShellForCommand(commandPath),
+        shell: useShell,
         windowsHide: true,
     });
 
