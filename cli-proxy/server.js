@@ -427,7 +427,10 @@ function shouldUseShellForCommand(commandPath) {
  */
 function quoteArgsForShell(args, useShell) {
     if (!useShell) return args;
-    return args.map(a => /\s/.test(a) ? `"${a}"` : a);
+    return args.map(a => {
+        if (!/[\s"]/.test(a)) return a;
+        return '"' + a.replace(/"/g, '\\"') + '"';
+    });
 }
 
 function getCliCheckArgs(tool) {
