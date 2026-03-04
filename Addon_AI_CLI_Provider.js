@@ -541,7 +541,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description: resolvedDescription,
-            version: '3.0.0',
+            version: '3.1.0',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
