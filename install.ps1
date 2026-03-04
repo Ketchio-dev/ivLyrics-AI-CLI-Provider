@@ -504,7 +504,7 @@ function Ensure-ProxyReady {
     $localVersion = Get-LocalProxyVersion
     $remoteVersion = Get-RemoteProxyVersion
     if ($localVersion -and $remoteVersion -and ($localVersion -ne $remoteVersion)) {
-        Write-Info "Updating cli-proxy ($localVersion -> $remoteVersion) ..."
+        Write-Info ("Updating cli-proxy ({0} -> {1}) ..." -f $localVersion, $remoteVersion)
         Install-Proxy
         return
     }
