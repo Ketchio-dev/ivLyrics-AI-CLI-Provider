@@ -434,6 +434,21 @@ function quoteArgsForShell(args, useShell) {
 }
 
 /**
+ * Force-kill a spawned process tree.
+ * On Windows with shell:true, SIGKILL only kills the wrapper cmd.exe,
+ * leaving orphan CLI processes. Use taskkill /T /F to kill the tree.
+ */
+function forceKillProcess(proc) {
+    try {
+        if (process.platform === 'win32') {
+            spawnSync('taskkill', ['/T', '/F', '/PID', String(proc.pid)], { stdio: 'ignore' });
+        } else {
+            proc.kill('SIGKILL');
+        }
+    } catch {}
+}
+
+/**
  * Spawn a CLI command, handling Windows .cmd files with multi-line arguments.
  *
  * cmd.exe cannot pass newlines inside arguments. When a multi-line arg is
@@ -463,10 +478,13 @@ function spawnCLI(commandPath, args, options) {
         return proc;
     }
 
-    return spawn(commandPath, quoteArgsForShell(args, useShell), {
-        ...options,
-        shell: useShell,
-    });
+    if (useShell) {
+        const quoted = quoteArgsForShell(args, true);
+        const cmdString = commandPath + (quoted.length ? ' ' + quoted.join(' ') : '');
+        return spawn(cmdString, [], { ...options, shell: true });
+    }
+
+    return spawn(commandPath, args, options);
 }
 
 function getCliCheckArgs(tool) {
@@ -1058,7 +1076,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
             if (!settled) {
                 settled = true;
                 decrementOnce();
-                proc.kill('SIGKILL');
+                forceKillProcess(proc);
                 reject(new Error(`Timeout after ${timeout}ms`));
             }
         }, timeout);
@@ -1070,7 +1088,7 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
                     settled = true;
                     clearTimeout(timer);
                     decrementOnce();
-                    proc.kill('SIGKILL');
+                    forceKillProcess(proc);
                     reject(new Error('Request aborted by client'));
                 }
             };
@@ -1276,7 +1294,7 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     const timer = setTimeout(() => {
         if (!settled) {
             settled = true;
-            proc.kill('SIGKILL');
+            forceKillProcess(proc);
             sendSSEError(res, `Timeout after ${timeout}ms`);
             sendSSEDone(res);
         }
@@ -1287,7 +1305,7 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         if (!settled) {
             settled = true;
             clearTimeout(timer);
-            proc.kill('SIGKILL');
+            forceKillProcess(proc);
             // activeCLIProcesses는 proc.on('close')에서 감소됨
         }
     });

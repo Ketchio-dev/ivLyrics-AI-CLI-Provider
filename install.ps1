@@ -311,7 +311,17 @@ function Refresh-ProcessPathFromSystem {
             }
         }
         if ($parts.Count -gt 0) {
-            $env:Path = ($parts -join ";")
+            $merged = ($parts -join ";") -split ";" | Where-Object { $_ -ne "" }
+            $seen = @{}
+            $unique = @()
+            foreach ($entry in $merged) {
+                $key = $entry.ToLower().TrimEnd('\')
+                if (-not $seen.ContainsKey($key)) {
+                    $seen[$key] = $true
+                    $unique += $entry
+                }
+            }
+            $env:Path = ($unique -join ";")
         }
     } catch {}
 }

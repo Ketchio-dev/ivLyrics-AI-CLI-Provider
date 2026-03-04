@@ -996,6 +996,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             Spicetify.showNotification?.('Copied!');
                         } catch (e) {
                             console.error('Failed to copy:', e);
+                            Spicetify.showNotification?.('Copy failed');
                         }
                     }, []);
                     const handleCopyCommand = useCallback(() => handleCopy(startCommand), [startCommand, handleCopy]);
