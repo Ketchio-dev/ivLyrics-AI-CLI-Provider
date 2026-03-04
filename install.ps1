@@ -7,12 +7,14 @@ param(
     [Alias('s')][switch]$StartProxy,
     [switch]$NoApply,
     [switch]$NoNpmInstall,
+    [switch]$NoNodeAutoInstall,
     [Alias('h')][switch]$Help,
     [Parameter(ValueFromRemainingArguments)][string[]]$Url,
     [string]$RepoBase = "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main"
 )
 
 $ErrorActionPreference = "Stop"
+$script:NodeAutoInstallAttempted = $false
 
 function Write-Info($Message) { Write-Host "[INFO]  $Message" -ForegroundColor Cyan }
 function Write-Ok($Message) { Write-Host "[OK]    $Message" -ForegroundColor Green }
@@ -29,6 +31,7 @@ if ($Help) {
     Write-Host "  -Full, -f         Install all addons + proxy"
     Write-Host "  -StartProxy, -s   Start proxy (auto-install if missing)"
     Write-Host "  -NoNpmInstall     Skip npm install in proxy directory"
+    Write-Host "  -NoNodeAutoInstall Skip automatic Node.js install when npm is missing"
     Write-Host "  -NoApply          Skip spicetify apply"
     Write-Host "  -Help, -h         Show this help"
     Write-Host "  URL               Install addon from URL (.js)"
@@ -225,12 +228,135 @@ function Install-AddonFromUrl([string]$AddonUrl) {
     $script:DidAddonInstall = $true
 }
 
-function Resolve-NpmCommand {
+function Test-IsWindowsHost {
+    return ($env:OS -eq "Windows_NT")
+}
+
+function Refresh-ProcessPathFromSystem {
+    if (-not (Test-IsWindowsHost)) {
+        return
+    }
+    try {
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $parts = @()
+        foreach ($part in @($env:Path, $machinePath, $userPath)) {
+            if (-not [string]::IsNullOrWhiteSpace($part)) {
+                $parts += $part
+            }
+        }
+        if ($parts.Count -gt 0) {
+            $env:Path = ($parts -join ";")
+        }
+    } catch {}
+}
+
+function Find-NpmCommand {
     $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if ($null -ne $npm) {
         return $npm
     }
     return Get-Command npm -ErrorAction SilentlyContinue
+}
+
+function Try-AutoInstallNodeOnWindows {
+    if ($NoNodeAutoInstall) {
+        Write-Warn "Skipped Node.js auto-install (-NoNodeAutoInstall)"
+        return $false
+    }
+    if (-not (Test-IsWindowsHost)) {
+        return $false
+    }
+    if ($script:NodeAutoInstallAttempted) {
+        return $false
+    }
+    $script:NodeAutoInstallAttempted = $true
+
+    Write-Info "npm not found. Attempting automatic Node.js LTS install ..."
+    $installed = $false
+
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($null -ne $winget) {
+        try {
+            Write-Info "Trying winget: OpenJS.NodeJS.LTS (source: winget)"
+            & $winget.Source install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok "Node.js installed via winget"
+                $installed = $true
+            } else {
+                Write-Warn "winget install failed (exit $LASTEXITCODE)"
+            }
+        } catch {
+            Write-Warn "winget install failed: $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $installed) {
+        $choco = Get-Command choco -ErrorAction SilentlyContinue
+        if ($null -ne $choco) {
+            try {
+                Write-Info "Trying choco: nodejs-lts"
+                & $choco.Source install nodejs-lts -y --no-progress
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Ok "Node.js installed via choco"
+                    $installed = $true
+                } else {
+                    Write-Warn "choco install failed (exit $LASTEXITCODE)"
+                }
+            } catch {
+                Write-Warn "choco install failed: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    if (-not $installed) {
+        $scoop = Get-Command scoop -ErrorAction SilentlyContinue
+        if ($null -ne $scoop) {
+            try {
+                Write-Info "Trying scoop: nodejs-lts"
+                & $scoop.Source install nodejs-lts
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Ok "Node.js installed via scoop"
+                    $installed = $true
+                } else {
+                    Write-Warn "scoop install failed (exit $LASTEXITCODE)"
+                }
+            } catch {
+                Write-Warn "scoop install failed: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    Refresh-ProcessPathFromSystem
+    $npm = Find-NpmCommand
+    if ($null -ne $npm) {
+        Write-Ok "npm detected: $($npm.Source)"
+        return $true
+    }
+
+    if (-not $installed) {
+        Write-Warn "Automatic Node.js install did not complete."
+    } else {
+        Write-Warn "Node.js install completed but npm is still not detected in this session."
+    }
+    Write-Warn "Run manually: winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements"
+    return $false
+}
+
+function Resolve-NpmCommand {
+    param(
+        [switch]$TryAutoInstall
+    )
+
+    $npm = Find-NpmCommand
+    if ($null -ne $npm) {
+        return $npm
+    }
+    if ($TryAutoInstall) {
+        [void](Try-AutoInstallNodeOnWindows)
+        return Find-NpmCommand
+    }
+    return $null
 }
 
 function Get-LocalProxyVersion {
@@ -275,9 +401,10 @@ function Install-Proxy {
         return
     }
 
-    $npm = Resolve-NpmCommand
+    $npm = Resolve-NpmCommand -TryAutoInstall
     if ($null -eq $npm) {
-        Write-Warn "npm not found. Run `cd $CliProxyDir; npm.cmd install` manually."
+        Write-Warn "npm not found. Run `winget install --id OpenJS.NodeJS.LTS -e --source winget` and retry."
+        Write-Warn "Manual fallback: `cd $CliProxyDir; npm.cmd install`"
         return
     }
 
@@ -322,9 +449,10 @@ function Ensure-ProxyReady {
         return
     }
 
-    $npm = Resolve-NpmCommand
+    $npm = Resolve-NpmCommand -TryAutoInstall
     if ($null -eq $npm) {
-        Write-Warn "npm not found. Run `cd $CliProxyDir; npm.cmd install` manually."
+        Write-Warn "npm not found. Run `winget install --id OpenJS.NodeJS.LTS -e --source winget` and retry."
+        Write-Warn "Manual fallback: `cd $CliProxyDir; npm.cmd install`"
         return
     }
 
@@ -343,9 +471,9 @@ function Start-ProxyServer {
         throw "cli-proxy not found at $CliProxyDir`nRun with -Proxy first, or use -StartProxy only to auto-install."
     }
 
-    $npm = Resolve-NpmCommand
+    $npm = Resolve-NpmCommand -TryAutoInstall
     if ($null -eq $npm) {
-        throw "npm not found in PATH. Install Node.js and retry."
+        throw "npm not found in PATH.`nInstall Node.js LTS and retry:`nwinget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements"
     }
 
     Push-Location $CliProxyDir
