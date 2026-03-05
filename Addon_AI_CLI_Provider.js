@@ -667,11 +667,14 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             let lastError = null;
 
             for (let attempt = 0; attempt < maxRetries; attempt++) {
+                const fetchController = new AbortController();
+                const fetchTimeoutId = setTimeout(() => fetchController.abort(), 180000);
                 try {
                     const response = await fetch(`${proxyUrl}/generate`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ tool: toolId, model, prompt, timeout: 120000, stream: true })
+                        body: JSON.stringify({ tool: toolId, model, prompt, timeout: 120000, stream: true }),
+                        signal: fetchController.signal
                     });
 
                     if (!response.ok) {
@@ -687,7 +690,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     }
 
                     const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
+                    const decoder = new TextDecoder('utf-8', { fatal: false });
                     let accumulated = '';
                     let buffer = '';
                     const appendChunk = (chunk) => {
@@ -746,6 +749,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     const message = getErrorMessage(e);
                     const lower = message.toLowerCase();
                     console.warn(`${LOG_TAG} Stream attempt ${attempt + 1} failed:`, message);
+                    if (fetchController.signal.aborted) {
+                        throw new Error(`${LOG_TAG} Request timed out`);
+                    }
                     if (lower.includes('not running') || lower.includes('econnrefused')) {
                         throw new Error(`${LOG_TAG} Server not running. Start with the setup command shown in addon settings.`);
                     }
@@ -753,6 +759,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         throw e;
                     }
                     if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                } finally {
+                    clearTimeout(fetchTimeoutId);
                 }
             }
 
@@ -765,11 +773,14 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             let lastError = null;
 
             for (let attempt = 0; attempt < maxRetries; attempt++) {
+                const fetchController = new AbortController();
+                const fetchTimeoutId = setTimeout(() => fetchController.abort(), 180000);
                 try {
                     const response = await fetch(`${proxyUrl}/generate`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ tool: toolId, model, prompt, timeout: 120000 })
+                        body: JSON.stringify({ tool: toolId, model, prompt, timeout: 120000 }),
+                        signal: fetchController.signal
                     });
 
                     if (!response.ok) {
@@ -786,6 +797,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                     const message = getErrorMessage(e);
                     const lower = message.toLowerCase();
                     console.warn(`${LOG_TAG} Attempt ${attempt + 1} failed:`, message);
+                    if (fetchController.signal.aborted) {
+                        throw new Error(`${LOG_TAG} Request timed out`);
+                    }
                     if (lower.includes('not running') || lower.includes('econnrefused')) {
                         throw new Error(`${LOG_TAG} Server not running. Start with the setup command shown in addon settings.`);
                     }
@@ -793,6 +807,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         throw e;
                     }
                     if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                } finally {
+                    clearTimeout(fetchTimeoutId);
                 }
             }
 

@@ -59,6 +59,7 @@ const HEALTH_CHECK_TIMEOUT_MS = 12000;    // Per-tool timeout in /health endpoin
 const RATE_LIMIT_WINDOW_MS = 60000;       // Rate limit window (1 minute)
 const RATE_LIMIT_MAX_REQUESTS = 120;      // Max /generate requests per window
 const UPDATE_CACHE_MAX_SIZE = 1048576;    // 1MB — skip cache if result is larger
+const MAX_STREAM_BUFFER_SIZE = 5 * 1024 * 1024; // 5MB — safety cap for streaming JSON buffers
 
 // ============================================
 // File Logger (rotation at 5MB, keeps 1 backup)
@@ -218,6 +219,15 @@ async function checkForUpdates(force = false) {
 
 // 서버는 127.0.0.1에만 바인딩되므로 외부 접근이 물리적으로 불가능
 // Spicetify 앱의 다양한 origin 형태를 모두 수용하기 위해 origin 제한 없음
+
+// Chromium Private Network Access (PNA) 지원
+// Spotify(Chromium)가 로컬 서버(127.0.0.1)에 접근할 때 PNA preflight 필요
+app.use((req, res, next) => {
+    if (req.headers['access-control-request-private-network']) {
+        res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+    next();
+});
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
@@ -469,27 +479,70 @@ function spawnSyncWithCmdWrapper(commandPath, args, options) {
  * leaving orphan CLI processes. Use taskkill /T /F to kill the tree.
  */
 function forceKillProcess(proc) {
+    if (!proc || !proc.pid) return;
     try {
         if (process.platform === 'win32') {
-            spawnSync('taskkill', ['/T', '/F', '/PID', String(proc.pid)], { stdio: 'ignore' });
+            const result = spawnSync('taskkill', ['/T', '/F', '/PID', String(proc.pid)], {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                timeout: 5000,
+            });
+            if (result.status !== 0) {
+                const errMsg = (result.stderr || '').toString().trim();
+                console.warn(`[Process] taskkill failed for PID ${proc.pid}: ${errMsg || 'exit ' + result.status}`);
+                // Fallback: try direct SIGKILL on the wrapper process
+                try { proc.kill('SIGKILL'); } catch {}
+            }
         } else {
             proc.kill('SIGKILL');
         }
+    } catch (e) {
+        console.warn(`[Process] Failed to kill PID ${proc.pid}: ${e.message}`);
+    }
+}
+
+/**
+ * npm이 생성한 .cmd 래퍼에서 실제 Node.js 엔트리 스크립트 경로를 추출.
+ * %dp0% 또는 %~dp0% 기준 상대 경로로 .js/.cjs/.mjs 파일을 찾는다.
+ * 실패 시 빈 문자열 반환.
+ */
+function extractCmdEntryScript(cmdPath) {
+    try {
+        const content = fs.readFileSync(cmdPath, 'utf8');
+        const cmdDir = path.dirname(cmdPath);
+        const pattern = /"%(?:~?dp0)%[\\\/]([^"]+\.(?:js|cjs|mjs))"/gi;
+        let match;
+        while ((match = pattern.exec(content)) !== null) {
+            const scriptPath = path.join(cmdDir, match[1]);
+            if (fs.existsSync(scriptPath)) return scriptPath;
+        }
     } catch {}
+    return '';
 }
 
 /**
  * Spawn a CLI command, handling Windows .cmd files with multi-line arguments.
  *
  * cmd.exe cannot pass newlines inside arguments. When a multi-line arg is
- * detected on Windows, we write it to a temp file and use PowerShell to
- * read it into a variable, bypassing cmd.exe argument parsing entirely.
+ * detected on Windows, we first try to resolve the .cmd wrapper to its
+ * underlying Node.js entry script and invoke it directly with node.exe,
+ * bypassing cmd.exe entirely. Falls back to PowerShell temp file approach
+ * if resolution fails.
  */
 function spawnCLI(commandPath, args, options) {
     const useShell = shouldUseShellForCommand(commandPath);
     const multilineIdx = useShell ? args.findIndex(a => /\n/.test(String(a))) : -1;
 
     if (multilineIdx >= 0) {
+        // .cmd → cmd.exe → newlines in args are treated as command separators.
+        const entryScript = extractCmdEntryScript(commandPath);
+        if (entryScript) {
+            return spawn(process.execPath, [entryScript, ...args], {
+                ...options,
+                shell: false,
+            });
+        }
+
+        // Fallback: PowerShell temp file approach (may still truncate on some setups)
         const tmpFile = path.join(os.tmpdir(), `ivlyrics-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
         fs.writeFileSync(tmpFile, args[multilineIdx], 'utf8');
 
@@ -1088,12 +1141,18 @@ function runCLI(toolId, prompt, model = '', timeout = 120000, signal = null) {
         console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
         console.log(`${'='.repeat(60)}`);
 
-        const proc = spawnCLI(commandPath, args, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            cwd: os.tmpdir(),
-            env: { ...process.env, NO_COLOR: '1' },
-            windowsHide: true,
-        });
+        let proc;
+        try {
+            proc = spawnCLI(commandPath, args, {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                cwd: os.tmpdir(),
+                env: { ...process.env, NO_COLOR: '1' },
+                windowsHide: true,
+            });
+        } catch (e) {
+            activeCLIProcesses--;
+            return reject(new Error(`Failed to spawn ${tool.command}: ${e.message}`));
+        }
 
         let stdout = '';
         let stderr = '';
@@ -1271,12 +1330,20 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
     console.log(`  Command: ${commandPath} ${argsForLog.join(' ')}`);
     console.log(`${'='.repeat(60)}`);
 
-    const proc = spawnCLI(commandPath, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: os.tmpdir(),
-        env: { ...process.env, NO_COLOR: '1' },
-        windowsHide: true,
-    });
+    let proc;
+    try {
+        proc = spawnCLI(commandPath, args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            cwd: os.tmpdir(),
+            env: { ...process.env, NO_COLOR: '1' },
+            windowsHide: true,
+        });
+    } catch (e) {
+        activeCLIProcesses--;
+        sendSSEError(res, `Failed to spawn ${tool.command}: ${e.message}`);
+        sendSSEDone(res);
+        return;
+    }
 
     let stderr = '';
     let settled = false;
@@ -1356,6 +1423,13 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
         }
         if (geminiJsonStreamEnabled) {
             geminiJsonBuffer += text;
+            if (geminiJsonBuffer.length > MAX_STREAM_BUFFER_SIZE) {
+                settled = true;
+                forceKillProcess(proc);
+                sendSSEError(res, 'Stream buffer exceeded maximum size');
+                sendSSEDone(res);
+                return;
+            }
             const lines = geminiJsonBuffer.split(/\r?\n/);
             geminiJsonBuffer = lines.pop() || '';
             for (const line of lines) {
@@ -1364,6 +1438,13 @@ function runCLIStream(toolId, prompt, model, timeout, res) {
             return;
         }
         codexJsonBuffer += text;
+        if (codexJsonBuffer.length > MAX_STREAM_BUFFER_SIZE) {
+            settled = true;
+            forceKillProcess(proc);
+            sendSSEError(res, 'Stream buffer exceeded maximum size');
+            sendSSEDone(res);
+            return;
+        }
         const lines = codexJsonBuffer.split(/\r?\n/);
         codexJsonBuffer = lines.pop() || '';
         for (const line of lines) {
@@ -1593,6 +1674,7 @@ app.post('/generate', async (req, res) => {
         if (!res.writableEnded) ac.abort();
     });
 
+    let isInflightOwner = false;
     try {
         console.log(`[API] Generate request - tool: ${tool}, mode: ${CLI_TOOLS[tool]?.mode}, model: ${requestedModel || 'default'}, prompt length: ${prompt.length}`);
         const startTime = Date.now();
@@ -1624,13 +1706,16 @@ app.post('/generate', async (req, res) => {
                 lyricsRequestKey ? null : ac.signal
             );
             setInflightLyricsRequest(lyricsRequestKey, sharedPromise);
+            isInflightOwner = true;
         } else {
             console.log(`[API] Joined in-flight request - tool: ${tool}, model: ${effectiveModel || 'default'}, prompt length: ${prompt.length}`);
         }
 
         const result = await sharedPromise;
-        clearInflightLyricsRequest(lyricsRequestKey);
-        setCachedLyricsResult(lyricsRequestKey, result);
+        if (isInflightOwner) {
+            clearInflightLyricsRequest(lyricsRequestKey);
+            setCachedLyricsResult(lyricsRequestKey, result);
+        }
         const elapsed = Date.now() - startTime;
         console.log(`[API] Completed in ${elapsed}ms`);
         if (!res.writableEnded) {
@@ -1645,7 +1730,7 @@ app.post('/generate', async (req, res) => {
             });
         }
     } catch (e) {
-        clearInflightLyricsRequest(lyricsRequestKey);
+        if (isInflightOwner) clearInflightLyricsRequest(lyricsRequestKey);
         console.error(`[API] Error:`, e.message);
         if (!res.writableEnded) {
             res.status(500).json({ error: e.message });
