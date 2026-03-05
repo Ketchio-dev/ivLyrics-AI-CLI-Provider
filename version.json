@@ -2,10 +2,10 @@
     "schemaVersion": 2,
     "proxy": { "version": "3.1.4" },
     "addons": {
-        "Addon_AI_CLI_Provider.js": { "version": "3.1.4", "id": "cli-claude" }
+        "Addon_AI_CLI_Provider.js": { "version": "3.1.5", "id": "cli-claude" }
     },
     "integrity": {
-        "Addon_AI_CLI_Provider.js": "sha256-4a11b9c6e8958fad88936b9f25582323ed39c9c6b1257ee04dec9d21452e195b",
+        "Addon_AI_CLI_Provider.js": "sha256-fb4c17c1bdbaf873ba0e3c64dc2c20c882a0937b8abeea0e26f99fb47368783d",
         "cli-proxy/server.js": "sha256-86162f3ae45249e1684c4d0504fec2b90842303626eb4ddae5ce6b16f367a9dd",
         "cli-proxy/package.json": "sha256-9735d47063464689033fc529f64d4ab4ebd55c71a69c4ce415d3626a22172011",
         "cli-proxy/package-lock.json": "sha256-08c488166619a3239076a1e950869b6c1eab002c69f33f6faef93e602c7a3c56",

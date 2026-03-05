@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 3.1.4
+ * @version 3.1.5
  */
 
 (() => {
@@ -88,21 +88,6 @@
         }
 
         return normalized;
-    }
-
-    function mergeModelOptions(primaryModels, extraModels = []) {
-        const modelMap = new Map();
-        for (const model of [...(primaryModels || []), ...(extraModels || [])]) {
-            const rawId = (model?.id || '').toString().trim();
-            if (!rawId) continue;
-            const id = normalizeGeminiModelId(rawId) || rawId;
-            if (modelMap.has(id)) continue;
-            modelMap.set(id, {
-                id,
-                name: (model?.name || id).toString().trim()
-            });
-        }
-        return Array.from(modelMap.values());
     }
 
     // ============================================
@@ -579,7 +564,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description: resolvedDescription,
-            version: '3.1.4',
+            version: '3.1.5',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -640,19 +625,12 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         if (!modelMap.has(m.id)) modelMap.set(m.id, m);
                     });
                 const models = Array.from(modelMap.values());
-                const source = (data?.source || '').toString().trim();
-                const useGeminiFallbackModels =
-                    toolId === 'gemini' &&
-                    (source === 'fallback' || models.length <= 1);
                 const rawDefault = sanitizeModel((data?.defaultModel || '').toString().trim(), safeDefaultModel);
                 const defaultModel = toolId === 'gemini' ? (normalizeGeminiModelId(rawDefault) || rawDefault) : rawDefault;
-                const resolvedModels = useGeminiFallbackModels
-                    ? mergeModelOptions(fallbackModels, models)
-                    : (models.length > 0 ? models : fallbackModels);
                 return {
-                    models: resolvedModels,
+                    models: models.length > 0 ? models : fallbackModels,
                     defaultModel,
-                    source
+                    source: (data?.source || '').toString().trim()
                 };
             } catch (e) {
                 console.warn(`${LOG_TAG} Failed to fetch models from proxy:`, e.message);
