@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$DefaultProxyUrl = "http://127.0.0.1:19284"
 
 function Write-Info($Message) { Write-Host "[INFO]  $Message" -ForegroundColor Cyan }
 function Write-Ok($Message) { Write-Host "[OK]    $Message" -ForegroundColor Green }
@@ -137,6 +138,47 @@ function Get-IvLyricsAppDirs([string]$PrimaryRoot) {
     return $dirs
 }
 
+function Wait-UntilPathMissing([string]$Path, [int]$TimeoutMs = 7000) {
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return (-not (Test-Path -LiteralPath $Path))
+}
+
+function Invoke-ProxySelfCleanup([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) {
+        return $false
+    }
+
+    try {
+        $payload = @{
+            action  = "cleanup"
+            target  = "proxy"
+            confirm = "REMOVE_PROXY"
+        } | ConvertTo-Json -Compress
+
+        Invoke-RestMethod -Method Post -Uri "$DefaultProxyUrl/cleanup" -ContentType "application/json" -Body $payload -TimeoutSec 4 | Out-Null
+
+        if (Wait-UntilPathMissing -Path $DirPath -TimeoutMs 7000) {
+            Write-Ok "Deleted proxy directory via cleanup endpoint: $DirPath"
+            return $true
+        }
+
+        Write-Info "Proxy cleanup endpoint responded, but directory is still present: $DirPath"
+    } catch {
+        $message = $_.Exception.Message
+        if (-not [string]::IsNullOrWhiteSpace($message)) {
+            Write-Info "Proxy cleanup endpoint unavailable, falling back to direct removal: $message"
+        }
+    }
+
+    return $false
+}
+
 function Stop-ProxyProcessesForDir([string]$DirPath) {
     if (-not (Test-Path -LiteralPath $DirPath)) { return }
 
@@ -167,6 +209,10 @@ function Stop-ProxyProcessesForDir([string]$DirPath) {
 function Remove-ProxyDirSafe([string]$DirPath) {
     if (-not (Test-Path -LiteralPath $DirPath)) {
         Write-Info "Proxy directory not found, skipping: $DirPath"
+        return
+    }
+
+    if (Invoke-ProxySelfCleanup -DirPath $DirPath) {
         return
     }
 
@@ -244,6 +290,76 @@ function Write-JsonMap([string]$Path, [hashtable]$Map) {
     Write-FileUtf8NoBom -Path $Path -Content (($Map | ConvertTo-Json -Depth 20) + "`n")
 }
 
+function Remove-FileIfEmptyMap([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $raw = Get-Content -LiteralPath $Path -Raw
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        try {
+            Remove-Item -LiteralPath $Path -Force
+            Write-Ok "Deleted empty metadata file: $Path"
+        } catch {
+            Write-Warn "Failed to delete empty metadata file: $Path"
+            Write-Warn $_.Exception.Message
+        }
+        return
+    }
+
+    try {
+        $obj = ConvertFrom-Json -InputObject $raw
+    } catch {
+        Write-Warn "Failed to parse JSON while checking for empty metadata file: $Path"
+        return
+    }
+
+    $map = @{}
+    foreach ($prop in $obj.PSObject.Properties) {
+        $map[$prop.Name] = $prop.Value
+    }
+    if ($map.Count -gt 0) {
+        return
+    }
+
+    try {
+        Remove-Item -LiteralPath $Path -Force
+        Write-Ok "Deleted empty metadata file: $Path"
+    } catch {
+        Write-Warn "Failed to delete empty metadata file: $Path"
+        Write-Warn $_.Exception.Message
+    }
+}
+
+function Remove-DirIfEmpty([string]$Path, [string]$Label = "directory") {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    try {
+        $items = @(Get-ChildItem -LiteralPath $Path -Force)
+        if ($items.Count -gt 0) {
+            return
+        }
+        Remove-Item -LiteralPath $Path -Force
+        Write-Ok "Deleted empty $Label: $Path"
+    } catch {
+        Write-Warn "Failed to delete empty $Label: $Path"
+        Write-Warn $_.Exception.Message
+    }
+}
+
+function Cleanup-AddonMetadata([string]$RootPath) {
+    if ([string]::IsNullOrWhiteSpace($RootPath)) {
+        return
+    }
+
+    $dataDir = Join-Path $RootPath "ivLyrics"
+    $sourcesPath = Join-Path $dataDir "addon_sources.json"
+    Remove-FileIfEmptyMap -Path $sourcesPath
+    Remove-DirIfEmpty -Path $dataDir -Label "ivLyrics data directory"
+}
+
 function Remove-AddonSourceAt([string]$SourcesPath, [string]$Filename) {
     if (-not (Test-Path -LiteralPath $SourcesPath)) {
         return
@@ -297,6 +413,7 @@ function Remove-AddonFromApp([string]$AppDir, [string]$Filename) {
 
     Remove-AddonSourceAt -SourcesPath $sourcesPath -Filename $Filename
     Remove-ManifestEntryAt -ManifestPath $manifestPath -Entry $Filename
+    Cleanup-AddonMetadata -RootPath $root
 }
 
 if ($Addons) {

@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+DEFAULT_PROXY_URL="http://127.0.0.1:19284"
 SPICETIFY_CONFIG=""
 IVLYRICS_APP=""
 IVLYRICS_ROOT=""
@@ -204,6 +205,38 @@ refresh_paths() {
     CLI_PROXY_DIR="$IVLYRICS_ROOT/cli-proxy"
 }
 
+wait_for_path_missing() {
+    local target_path="$1"
+    local attempts="${2:-28}"
+
+    while [ "$attempts" -gt 0 ]; do
+        if [ ! -e "$target_path" ]; then
+            return 0
+        fi
+        sleep 0.25
+        attempts=$((attempts - 1))
+    done
+
+    [ ! -e "$target_path" ]
+}
+
+invoke_proxy_self_cleanup() {
+    local dir="$1"
+    [ -d "$dir" ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+
+    local payload='{"action":"cleanup","target":"proxy","confirm":"REMOVE_PROXY"}'
+    if curl -fsS -X POST -H 'Content-Type: application/json' --data "$payload" "$DEFAULT_PROXY_URL/cleanup" >/dev/null 2>&1; then
+        if wait_for_path_missing "$dir" 28; then
+            ok "Deleted proxy directory via cleanup endpoint: $dir"
+            return 0
+        fi
+        info "Proxy cleanup endpoint responded, but directory is still present: $dir"
+    fi
+
+    return 1
+}
+
 preflight() {
     if command -v spicetify >/dev/null 2>&1; then
         HAS_SPICETIFY=1
@@ -259,6 +292,28 @@ remove_addon_source() {
     mv "$tmp" "$sources_path"
 }
 
+cleanup_empty_addon_metadata() {
+    local root="$1"
+    [ -n "$root" ] || return 0
+
+    local data_dir="$root/ivLyrics"
+    local sources_path="$data_dir/addon_sources.json"
+
+    if [ -f "$sources_path" ]; then
+        local normalized=""
+        normalized=$(tr -d '[:space:]' < "$sources_path" 2>/dev/null || true)
+        if [ -z "$normalized" ] || [ "$normalized" = "{}" ]; then
+            rm -f "$sources_path"
+            ok "Deleted empty metadata file: $sources_path"
+        fi
+    fi
+
+    if [ -d "$data_dir" ] && [ -z "$(find "$data_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+        rmdir "$data_dir"
+        ok "Deleted empty ivLyrics data directory: $data_dir"
+    fi
+}
+
 remove_addon() {
     local app_dir="$1"
     local filename="$2"
@@ -277,6 +332,7 @@ remove_addon() {
 
     remove_manifest_entry "$manifest_path" "$filename"
     remove_addon_source "$sources_path" "$filename"
+    cleanup_empty_addon_metadata "$root"
     ok "Removed references for $filename ($app_dir)"
 }
 
@@ -339,6 +395,10 @@ remove_proxy() {
         [ -n "$d" ] || continue
         if [ ! -d "$d" ]; then
             info "Proxy directory not found, skipping: $d"
+            continue
+        fi
+
+        if invoke_proxy_self_cleanup "$d"; then
             continue
         fi
 
