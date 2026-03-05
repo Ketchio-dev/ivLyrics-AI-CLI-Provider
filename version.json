@@ -1,14 +1,14 @@
 {
     "schemaVersion": 2,
-    "proxy": { "version": "3.1.1" },
+    "proxy": { "version": "3.1.2" },
     "addons": {
         "Addon_AI_CLI_Provider.js": { "version": "3.1.0", "id": "cli-claude" }
     },
     "integrity": {
         "Addon_AI_CLI_Provider.js": "sha256-06baace198bce0f70324647a34a750b2036f9f7d48cacde61aa5eb329937902f",
-        "cli-proxy/server.js": "sha256-e31761bc082a1157f1f1889c8f85a6ceba73c40a0f3e95272c7aab74c126b23c",
-        "cli-proxy/package.json": "sha256-0513fd91caf0400bd712d414e24c00edfbb538362a8ea9f6d0378e197c30b16f",
-        "cli-proxy/package-lock.json": "sha256-418407e089aa0c53d634b97aa93334b937354452d0cc8858c2d2ae57962fc1f5",
+        "cli-proxy/server.js": "sha256-d677701e5bca0878122d4719c654999865a25887d181cebf542fc10048a614d8",
+        "cli-proxy/package.json": "sha256-79a550afd30f0743837e4108774871cea66dac19e1145165220dbcb49fff2af0",
+        "cli-proxy/package-lock.json": "sha256-ca7afca176744842a132e7d32f2b422a9f31f91287a5b49d820bfdbb6be4fba1",
         "cli-proxy/README.md": "sha256-f5afe9a347dc17d4cea17668b4a37ab5effc1cdb7a988b4453faed8236d1dc3c",
         "cli-proxy/spotify-with-proxy.sh": "sha256-4d9242911f10cb802126651b61ca388c01b3dac7d84e1aba0e5082297b96a1f6",
         "cli-proxy/spotify-with-proxy.ps1": "sha256-b3d85f37c7d84c366cb4f38fabc09343232ac936cf88b4ced97a3eee43757740",

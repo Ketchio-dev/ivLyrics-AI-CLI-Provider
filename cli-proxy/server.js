@@ -100,7 +100,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '3.1.1';
+const LOCAL_VERSION = '3.1.2';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -908,8 +908,7 @@ function checkToolAvailable(toolId) {
         });
     }
 
-    const useShell = shouldUseShellForCommand(commandPath);
-    const checkArgs = quoteArgsForShell(getCliCheckArgs(tool), useShell);
+    const checkArgs = getCliCheckArgs(tool);
     const spawnOptions = {
         stdio: ['ignore', 'pipe', 'pipe'],
         cwd: os.tmpdir(),
@@ -919,9 +918,13 @@ function checkToolAvailable(toolId) {
 
     return new Promise((resolve) => {
         let settled = false;
-        const proc = useShell
-            ? spawnWithCmdWrapper(commandPath, checkArgs, spawnOptions)
-            : spawn(commandPath, checkArgs, { ...spawnOptions, shell: false });
+        let proc;
+        try {
+            proc = spawnCLI(commandPath, checkArgs, spawnOptions);
+        } catch (err) {
+            resolve({ available: false, error: `${tool.command} check failed: ${err.message}` });
+            return;
+        }
 
         let stdout = '';
         let stderr = '';
