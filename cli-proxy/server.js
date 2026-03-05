@@ -16,6 +16,7 @@
 const express = require('express');
 const cors = require('cors');
 const { spawn, spawnSync, execSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -60,6 +61,8 @@ const RATE_LIMIT_WINDOW_MS = 60000;       // Rate limit window (1 minute)
 const RATE_LIMIT_MAX_REQUESTS = 120;      // Max /generate requests per window
 const UPDATE_CACHE_MAX_SIZE = 1048576;    // 1MB — skip cache if result is larger
 const MAX_STREAM_BUFFER_SIZE = 5 * 1024 * 1024; // 5MB — safety cap for streaming JSON buffers
+const RATE_LIMIT_MAX_CLIENTS = 1000;      // Max tracked client buckets for rate limiting
+const ADMIN_ACTION_HEADER = 'x-ivlyrics-action';
 
 // ============================================
 // File Logger (rotation at 5MB, keeps 1 backup)
@@ -155,6 +158,48 @@ function getSpicetifyAddonDir() {
     return path.join(getSpicetifyConfigDir(), 'CustomApps', 'ivLyrics');
 }
 
+function hashSha256Hex(contentBuffer) {
+    return crypto.createHash('sha256').update(contentBuffer).digest('hex');
+}
+
+function normalizeIntegrityHash(value) {
+    const raw = normalizeModelId(value).toLowerCase();
+    if (!raw) return '';
+    const normalized = raw
+        .replace(/^sha256[-:]/, '')
+        .trim();
+    if (!/^[a-f0-9]{64}$/.test(normalized)) return '';
+    return normalized;
+}
+
+function hashesEqual(expectedHash, actualHash) {
+    const expected = Buffer.from(expectedHash, 'hex');
+    const actual = Buffer.from(actualHash, 'hex');
+    if (expected.length !== actual.length) return false;
+    return crypto.timingSafeEqual(expected, actual);
+}
+
+async function fetchVersionManifest(timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(VERSION_CHECK_URL, { signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json();
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function fetchIntegrityMap() {
+    const manifest = await fetchVersionManifest();
+    const integrity = manifest?.integrity;
+    if (!integrity || typeof integrity !== 'object' || Array.isArray(integrity)) {
+        throw new Error('Integrity manifest missing from version.json');
+    }
+    return integrity;
+}
+
 async function checkForUpdates(force = false) {
     const now = Date.now();
     if (!force && updateCache.data && (now - updateCache.ts) < UPDATE_CACHE_TTL_MS) {
@@ -162,16 +207,7 @@ async function checkForUpdates(force = false) {
     }
 
     try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        const response = await fetch(VERSION_CHECK_URL, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-
-        const remoteManifest = await response.json();
+        const remoteManifest = await fetchVersionManifest();
         const result = { proxy: null, addons: {} };
 
         // Check proxy version
@@ -220,6 +256,80 @@ async function checkForUpdates(force = false) {
 // 서버는 127.0.0.1에만 바인딩되므로 외부 접근이 물리적으로 불가능
 // Spicetify 앱의 다양한 origin 형태를 모두 수용하기 위해 origin 제한 없음
 
+function parseOrigin(originHeader) {
+    try {
+        return new URL(String(originHeader || '').trim());
+    } catch {
+        return null;
+    }
+}
+
+function isTrustedOrigin(originHeader) {
+    if (!originHeader || originHeader === 'null') return false;
+    const parsed = parseOrigin(originHeader);
+    if (!parsed) return false;
+    if (parsed.protocol === 'spicetify:') return true;
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    const host = normalizeModelId(parsed.hostname).toLowerCase();
+    if (!host) return false;
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    if (host === 'open.spotify.com' || host === 'xpui.app.spotify.com') return true;
+    if (host.endsWith('.spotify.com')) return true;
+    return false;
+}
+
+function isTrustedAdminOrigin(originHeader) {
+    if (!originHeader || originHeader === 'null') return false;
+    const parsed = parseOrigin(originHeader);
+    if (!parsed) return false;
+    if (parsed.protocol === 'spicetify:') return true;
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    const host = normalizeModelId(parsed.hostname).toLowerCase();
+    if (!host) return false;
+    if (host === 'open.spotify.com' || host === 'xpui.app.spotify.com') return true;
+    if (host.endsWith('.spotify.com')) return true;
+    return false;
+}
+
+const corsOptions = {
+    origin: (origin, callback) => {
+        if (!origin || isTrustedOrigin(origin)) {
+            return callback(null, true);
+        }
+        return callback(null, false);
+    },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Accept', ADMIN_ACTION_HEADER],
+};
+
+function requireAdminRequestGuard(req, res, next) {
+    const origin = normalizeModelId(req.headers.origin || '');
+    const secFetchSite = normalizeModelId(req.headers['sec-fetch-site'] || '').toLowerCase();
+    if (origin && !isTrustedAdminOrigin(origin)) {
+        return res.status(403).json({ error: 'Untrusted origin for admin endpoint' });
+    }
+    if (!origin && secFetchSite === 'cross-site') {
+        return res.status(403).json({ error: 'Cross-site browser requests are not allowed for admin endpoints' });
+    }
+
+    const contentType = normalizeModelId(req.headers['content-type'] || '').toLowerCase();
+    if (!contentType.includes('application/json')) {
+        return res.status(415).json({ error: 'Content-Type must be application/json' });
+    }
+
+    if (origin) {
+        const expectedAction = req.path === '/cleanup' ? 'cleanup' : 'update';
+        const receivedAction = normalizeModelId(req.headers[ADMIN_ACTION_HEADER] || '').toLowerCase();
+        if (receivedAction !== expectedAction) {
+            return res.status(400).json({ error: `Missing or invalid ${ADMIN_ACTION_HEADER} header` });
+        }
+    }
+
+    return next();
+}
+
 // Chromium Private Network Access (PNA) 지원
 // Spotify(Chromium)가 로컬 서버(127.0.0.1)에 접근할 때 PNA preflight 필요
 app.use((req, res, next) => {
@@ -228,22 +338,47 @@ app.use((req, res, next) => {
     }
     next();
 });
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiter state for /generate endpoint
-let rateLimitCount = 0;
-let rateLimitWindowStart = Date.now();
+const rateLimitBuckets = new Map();
 let isShuttingDown = false;
 
-function checkRateLimit() {
+function getClientKey(req) {
+    const remoteAddress = normalizeModelId(req.socket?.remoteAddress || req.ip || '');
+    return remoteAddress || 'local';
+}
+
+function checkRateLimit(req) {
+    const clientKey = getClientKey(req);
     const now = Date.now();
-    if (now - rateLimitWindowStart > RATE_LIMIT_WINDOW_MS) {
-        rateLimitCount = 0;
-        rateLimitWindowStart = now;
+    let bucket = rateLimitBuckets.get(clientKey);
+
+    if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
+        bucket = { windowStart: now, count: 0 };
     }
-    if (rateLimitCount >= RATE_LIMIT_MAX_REQUESTS) return false;
-    rateLimitCount++;
+
+    if (bucket.count >= RATE_LIMIT_MAX_REQUESTS) {
+        rateLimitBuckets.set(clientKey, bucket);
+        return false;
+    }
+
+    bucket.count += 1;
+    rateLimitBuckets.set(clientKey, bucket);
+
+    if (rateLimitBuckets.size > RATE_LIMIT_MAX_CLIENTS) {
+        for (const [key, value] of rateLimitBuckets) {
+            if (now - value.windowStart > RATE_LIMIT_WINDOW_MS) {
+                rateLimitBuckets.delete(key);
+            }
+        }
+        if (rateLimitBuckets.size > RATE_LIMIT_MAX_CLIENTS) {
+            const oldestKey = rateLimitBuckets.keys().next().value;
+            if (oldestKey) rateLimitBuckets.delete(oldestKey);
+        }
+    }
+
     return true;
 }
 
@@ -1656,7 +1791,7 @@ app.post('/generate', async (req, res) => {
     }
 
     // Rate limiting
-    if (!checkRateLimit()) {
+    if (!checkRateLimit(req)) {
         return res.status(429).json({ error: `Rate limit exceeded. Max ${RATE_LIMIT_MAX_REQUESTS} requests per minute.` });
     }
 
@@ -1786,8 +1921,24 @@ app.get('/updates', async (req, res) => {
 });
 
 function isSafeProxyDir(dirPath) {
-    const resolved = path.resolve(dirPath || '');
-    return path.basename(resolved).toLowerCase() === 'cli-proxy';
+    try {
+        const resolved = path.resolve(dirPath || '');
+        const realPath = fs.realpathSync(resolved);
+        const resolvedNorm = path.normalize(resolved).toLowerCase();
+        const realNorm = path.normalize(realPath).toLowerCase();
+        if (resolvedNorm !== realNorm) return false;
+
+        const stat = fs.lstatSync(resolved);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+        if (path.basename(realPath).toLowerCase() !== 'cli-proxy') return false;
+
+        const segments = realNorm.split(path.sep).filter(Boolean);
+        if (!segments.includes('spicetify') && !segments.includes('.spicetify')) return false;
+
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 function scheduleDirectoryRemoval(dirPath) {
@@ -1819,21 +1970,12 @@ function scheduleDirectoryRemoval(dirPath) {
  * 프록시 자체 정리(삭제)
  * - 마켓플레이스에서 애드온 제거 시 호출되는 용도
  */
-app.post('/cleanup', express.text({ type: 'text/plain', limit: '64kb' }), async (req, res) => {
+app.post('/cleanup', requireAdminRequestGuard, async (req, res) => {
     if (isShuttingDown) {
         return res.status(409).json({ error: 'Server is shutting down' });
     }
 
-    let payload = req.body;
-    if (typeof payload === 'string') {
-        try {
-            payload = JSON.parse(payload);
-        } catch {
-            payload = {};
-        }
-    }
-
-    const { target, confirm, dryRun } = payload || {};
+    const { target, confirm, dryRun } = req.body || {};
     if (target !== 'proxy') {
         return res.status(400).json({ error: 'Missing/invalid target (expected: proxy)' });
     }
@@ -1880,7 +2022,7 @@ app.post('/cleanup', express.text({ type: 'text/plain', limit: '64kb' }), async 
 /**
  * 파일 업데이트 실행
  */
-app.post('/update', async (req, res) => {
+app.post('/update', requireAdminRequestGuard, async (req, res) => {
     const { target } = req.body;
     if (!target) {
         return res.status(400).json({ error: 'Missing target (addons, proxy, all, or filename)' });
@@ -1895,8 +2037,36 @@ app.post('/update', async (req, res) => {
         return res.status(400).json({ error: `Invalid target: ${target}` });
     }
 
+    let proxyBackups = [];
+    const backupProxyFile = (filePath) => {
+        if (!fs.existsSync(filePath)) return;
+        const backupPath = `${filePath}.bak-${Date.now()}-${process.pid}`;
+        fs.copyFileSync(filePath, backupPath);
+        proxyBackups.push({ filePath, backupPath });
+    };
+
+    const restoreProxyBackups = () => {
+        for (let i = proxyBackups.length - 1; i >= 0; i--) {
+            const item = proxyBackups[i];
+            if (!item || !item.backupPath || !item.filePath) continue;
+            if (!fs.existsSync(item.backupPath)) continue;
+            fs.copyFileSync(item.backupPath, item.filePath);
+        }
+    };
+
+    const cleanupProxyBackups = () => {
+        for (const item of proxyBackups) {
+            if (!item || !item.backupPath) continue;
+            if (fs.existsSync(item.backupPath)) {
+                try { fs.unlinkSync(item.backupPath); } catch {}
+            }
+        }
+        proxyBackups = [];
+    };
+
     try {
         const results = [];
+        const integrityMap = await fetchIntegrityMap();
 
         const downloadFile = async (remotePath, localPath, label) => {
             // Path traversal 방지: 파일명에 경로 구분자나 .. 포함 시 차단
@@ -1907,6 +2077,11 @@ app.post('/update', async (req, res) => {
                 throw new Error(`Invalid path detected: ${label}`);
             }
 
+            const expectedHash = normalizeIntegrityHash(integrityMap[remotePath]);
+            if (!expectedHash) {
+                throw new Error(`Missing/invalid integrity hash for ${remotePath}`);
+            }
+
             const url = `${GITHUB_RAW_BASE}/${encodeURI(remotePath)}`;
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 30000);
@@ -1915,13 +2090,26 @@ app.post('/update', async (req, res) => {
             if (!response.ok) {
                 throw new Error(`Failed to download ${label}: HTTP ${response.status}`);
             }
-            const content = await response.text();
+            const contentBuffer = Buffer.from(await response.arrayBuffer());
+            const actualHash = hashSha256Hex(contentBuffer);
+            if (!hashesEqual(expectedHash, actualHash)) {
+                throw new Error(`Integrity check failed for ${label}`);
+            }
             const dir = path.dirname(localPath);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
-            fs.writeFileSync(localPath, content, 'utf8');
-            return { file: label, status: 'updated' };
+
+            const tempPath = `${localPath}.tmp-${Date.now()}-${process.pid}`;
+            try {
+                fs.writeFileSync(tempPath, contentBuffer);
+                fs.renameSync(tempPath, localPath);
+            } finally {
+                if (fs.existsSync(tempPath)) {
+                    try { fs.unlinkSync(tempPath); } catch {}
+                }
+            }
+            return { file: label, status: 'updated', integrity: 'verified' };
         };
 
         const addonDir = getSpicetifyAddonDir();
@@ -1945,16 +2133,17 @@ app.post('/update', async (req, res) => {
             const serverLocalPath = path.join(__dirname, 'server.js');
             const pkgLocalPath = path.join(__dirname, 'package.json');
             const lockLocalPath = path.join(__dirname, 'package-lock.json');
+
+            backupProxyFile(serverLocalPath);
+            backupProxyFile(pkgLocalPath);
+            backupProxyFile(lockLocalPath);
+
             const result = await downloadFile('cli-proxy/server.js', serverLocalPath, 'server.js');
             results.push(result);
-            try {
-                const pkgResult = await downloadFile('cli-proxy/package.json', pkgLocalPath, 'package.json');
-                results.push(pkgResult);
-            } catch {}
-            try {
-                const lockResult = await downloadFile('cli-proxy/package-lock.json', lockLocalPath, 'package-lock.json');
-                results.push(lockResult);
-            } catch {}
+            const pkgResult = await downloadFile('cli-proxy/package.json', pkgLocalPath, 'package.json');
+            results.push(pkgResult);
+            const lockResult = await downloadFile('cli-proxy/package-lock.json', lockLocalPath, 'package-lock.json');
+            results.push(lockResult);
 
             const npmCommandPath = resolveCommandPath('npm');
             if (!npmCommandPath) {
@@ -2008,6 +2197,8 @@ app.post('/update', async (req, res) => {
         // Invalidate cache
         updateCache = { data: null, ts: 0 };
 
+        cleanupProxyBackups();
+
         res.json({ success: true, results });
 
         // Auto-restart after proxy update
@@ -2026,6 +2217,16 @@ app.post('/update', async (req, res) => {
             }, 1000);
         }
     } catch (e) {
+        if (proxyBackups.length > 0) {
+            try {
+                restoreProxyBackups();
+                console.warn('[update] Rolled back proxy files after failure');
+            } catch (restoreErr) {
+                console.error('[update] Failed to restore proxy backup:', restoreErr.message);
+            } finally {
+                cleanupProxyBackups();
+            }
+        }
         console.error('[update] Error:', e.message);
         res.status(500).json({ error: e.message });
     }

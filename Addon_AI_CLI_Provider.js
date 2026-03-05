@@ -216,16 +216,44 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
     }
 
     function extractJSON(text) {
+        const MAX_JSON_SCAN_CHARS = 200000;
         let cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        if (cleaned.length > MAX_JSON_SCAN_CHARS) {
+            cleaned = cleaned.slice(0, MAX_JSON_SCAN_CHARS);
+        }
         try {
             return JSON.parse(cleaned);
         } catch {
-            const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                try { return JSON.parse(jsonMatch[0]); } catch { }
+            const start = cleaned.indexOf('{');
+            const end = cleaned.lastIndexOf('}');
+            if (start >= 0 && end > start) {
+                const candidate = cleaned.slice(start, end + 1);
+                if (candidate.length <= MAX_JSON_SCAN_CHARS) {
+                    try { return JSON.parse(candidate); } catch { }
+                }
             }
         }
         return null;
+    }
+
+    function tryNormalizeProxyUrl(rawValue) {
+        const input = (rawValue || '').toString().trim();
+        if (!input) return '';
+        try {
+            const parsed = new URL(input);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+            if (!parsed.hostname) return '';
+            parsed.pathname = '';
+            parsed.search = '';
+            parsed.hash = '';
+            return parsed.origin;
+        } catch {
+            return '';
+        }
+    }
+
+    function normalizeProxyUrl(rawValue) {
+        return tryNormalizeProxyUrl(rawValue) || DEFAULT_PROXY_URL;
     }
 
     // ============================================
@@ -301,7 +329,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                 const response = await fetch(`${proxyUrl}/update`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-IVLYRICS-Action': 'update'
+                    },
                     body: JSON.stringify({ target: 'proxy' })
                 });
                 if (!response.ok) {
@@ -428,9 +459,8 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             for (const mappedId of mappedIds) {
                 try {
                     const value = manager.getAddonSetting(mappedId, 'proxy-url', DEFAULT_PROXY_URL);
-                    if (typeof value === 'string' && /^https?:\/\/[^/\s]+/i.test(value.trim())) {
-                        return value.trim();
-                    }
+                    const normalized = tryNormalizeProxyUrl(value);
+                    if (normalized) return normalized;
                 } catch {
                     // ignore and try next mapped addon
                 }
@@ -451,23 +481,15 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 confirm: 'REMOVE_PROXY'
             });
 
-            if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-                try {
-                    const blob = new Blob([payload], { type: 'application/json' });
-                    if (navigator.sendBeacon(cleanupUrl, blob)) {
-                        return;
-                    }
-                } catch {
-                    // fallback to fetch
-                }
-            }
-
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 2000);
             try {
                 await fetch(cleanupUrl, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-IVLYRICS-Action': 'cleanup'
+                    },
                     body: payload,
                     signal: controller.signal,
                     keepalive: true
@@ -560,7 +582,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
         }
 
         function getProxyUrl() {
-            return getSetting('proxy-url', DEFAULT_PROXY_URL) || DEFAULT_PROXY_URL;
+            return normalizeProxyUrl(getSetting('proxy-url', DEFAULT_PROXY_URL));
         }
 
         function getSelectedModel() {
@@ -866,7 +888,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 const addonRef = addon;
 
                 return function CLIProviderSettings() {
-                    const [proxyUrl, setProxyUrl] = useState(getSetting('proxy-url', DEFAULT_PROXY_URL));
+                    const [proxyUrl, setProxyUrl] = useState(getProxyUrl());
                     const [availableModels, setAvailableModels] = useState([]);
                     const [selectedModel, setSelectedModel] = useState(getSelectedModel());
                     const [resolvedModel, setResolvedModel] = useState('');
@@ -945,8 +967,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
                     const handleProxyUrlChange = useCallback((e) => {
                         const value = e.target.value;
-                        setProxyUrl(value);
-                        setSetting('proxy-url', value);
+                        const normalized = normalizeProxyUrl(value);
+                        setProxyUrl(normalized);
+                        setSetting('proxy-url', normalized);
                     }, []);
 
                     const handleModelChange = useCallback((e) => {
@@ -996,7 +1019,10 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                             const pUrl = getProxyUrl();
                             const response = await fetch(`${pUrl}/update`, {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-IVLYRICS-Action': 'update'
+                                },
                                 body: JSON.stringify({ target: 'all' })
                             });
                             if (!response.ok) {

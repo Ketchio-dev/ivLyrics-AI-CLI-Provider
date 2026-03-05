@@ -152,15 +152,75 @@ $ProxyFiles = @(
     "spotify-with-proxy.ps1"
 )
 
+$script:IntegrityMap = @{}
+
 function Ensure-Dir([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 }
 
-function Download-File([string]$RemoteUrl, [string]$Destination) {
+function Normalize-Sha256([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+    $normalized = $Value.Trim().ToLowerInvariant()
+    if ($normalized.StartsWith("sha256-")) {
+        $normalized = $normalized.Substring(7)
+    } elseif ($normalized.StartsWith("sha256:")) {
+        $normalized = $normalized.Substring(7)
+    }
+    if ($normalized -notmatch '^[a-f0-9]{64}$') {
+        return ""
+    }
+    return $normalized
+}
+
+function Load-IntegrityMap {
+    if ($script:IntegrityMap.Count -gt 0) {
+        return
+    }
+    $versionUrl = "$RepoBase/version.json"
+    $raw = Invoke-WebRequest -UseBasicParsing -Uri $versionUrl
+    $obj = $raw.Content | ConvertFrom-Json
+    $integrity = $obj.integrity
+    if ($null -eq $integrity) {
+        throw "Integrity map missing in version.json"
+    }
+
+    foreach ($prop in $integrity.PSObject.Properties) {
+        $normalized = Normalize-Sha256 -Value ([string]$prop.Value)
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            $script:IntegrityMap[$prop.Name] = $normalized
+        }
+    }
+    if ($script:IntegrityMap.Count -eq 0) {
+        throw "No valid integrity hashes found in version.json"
+    }
+}
+
+function Assert-FileIntegrity([string]$Path, [string]$IntegrityKey) {
+    if ([string]::IsNullOrWhiteSpace($IntegrityKey)) {
+        return
+    }
+    if ($script:IntegrityMap.Count -eq 0) {
+        Load-IntegrityMap
+    }
+    if (-not $script:IntegrityMap.ContainsKey($IntegrityKey)) {
+        throw "Missing integrity entry for $IntegrityKey"
+    }
+
+    $expected = $script:IntegrityMap[$IntegrityKey]
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "Integrity check failed for $IntegrityKey"
+    }
+}
+
+function Download-File([string]$RemoteUrl, [string]$Destination, [string]$IntegrityKey = "") {
     Ensure-Dir (Split-Path -Parent $Destination)
     Invoke-WebRequest -UseBasicParsing -Uri $RemoteUrl -OutFile $Destination
+    Assert-FileIntegrity -Path $Destination -IntegrityKey $IntegrityKey
 }
 
 function Test-IvLyricsReady {
@@ -283,7 +343,11 @@ function Install-AddonFromUrl([string]$AddonUrl) {
 
     $dest = Join-Path $IvLyricsApp $filename
     Write-Info "Downloading $filename ..."
-    Download-File -RemoteUrl $AddonUrl -Destination $dest
+    $integrityKey = ""
+    if ($AddonUrl.StartsWith("$RepoBase/")) {
+        $integrityKey = $filename
+    }
+    Download-File -RemoteUrl $AddonUrl -Destination $dest -IntegrityKey $integrityKey
     Write-Ok "Downloaded -> $dest"
 
     Update-AddonSource -Filename $filename -RemoteUrl $AddonUrl
@@ -467,7 +531,7 @@ function Install-Proxy {
     foreach ($relative in $ProxyFiles) {
         $url = "$RepoBase/cli-proxy/$relative"
         $dest = Join-Path $CliProxyDir $relative
-        Download-File -RemoteUrl $url -Destination $dest
+        Download-File -RemoteUrl $url -Destination $dest -IntegrityKey "cli-proxy/$relative"
         Write-Ok "Downloaded proxy file: $relative"
     }
 

@@ -170,6 +170,120 @@ preflight() {
     fi
 }
 
+INTEGRITY_MAP_FILE=""
+
+cleanup_integrity_map() {
+    if [ -n "$INTEGRITY_MAP_FILE" ] && [ -f "$INTEGRITY_MAP_FILE" ]; then
+        rm -f "$INTEGRITY_MAP_FILE"
+    fi
+}
+trap cleanup_integrity_map EXIT
+
+sha256_file() {
+    local file_path="$1"
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file_path" | awk '{print tolower($1)}'
+        return 0
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file_path" | awk '{print tolower($1)}'
+        return 0
+    fi
+    err "No SHA-256 tool found (need shasum or sha256sum)."
+    return 1
+}
+
+normalize_sha256() {
+    local value
+    value=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    value=${value#sha256-}
+    value=${value#sha256:}
+    printf '%s' "$value"
+}
+
+load_integrity_map() {
+    if [ -n "$INTEGRITY_MAP_FILE" ] && [ -f "$INTEGRITY_MAP_FILE" ]; then
+        return 0
+    fi
+
+    local version_tmp
+    version_tmp=$(mktemp)
+    local map_tmp
+    map_tmp=$(mktemp)
+
+    if ! curl -fsSL "$REPO_BASE/version.json" -o "$version_tmp"; then
+        rm -f "$version_tmp" "$map_tmp"
+        err "Failed to download version.json for integrity checks"
+        return 1
+    fi
+
+    awk '
+    /"integrity"[[:space:]]*:[[:space:]]*\{/ { in_integrity = 1; next }
+    in_integrity && /^[[:space:]]*\}/ { in_integrity = 0; exit }
+    in_integrity {
+        line = $0
+        gsub(/^[[:space:]]+/, "", line)
+        gsub(/[[:space:]]+$/, "", line)
+        if (match(line, /"[^"]+"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+            key = line
+            sub(/:.*/, "", key)
+            gsub(/^"|"$/, "", key)
+
+            val = line
+            sub(/^[^:]*:[[:space:]]*"/, "", val)
+            sub(/"[,]?$/, "", val)
+            print key "\t" val
+        }
+    }
+    ' "$version_tmp" > "$map_tmp"
+
+    rm -f "$version_tmp"
+
+    if [ ! -s "$map_tmp" ]; then
+        rm -f "$map_tmp"
+        err "Integrity map missing or invalid in version.json"
+        return 1
+    fi
+
+    INTEGRITY_MAP_FILE="$map_tmp"
+    return 0
+}
+
+expected_integrity_hash() {
+    local key="$1"
+    awk -F '\t' -v target="$key" '$1 == target { print $2; exit }' "$INTEGRITY_MAP_FILE"
+}
+
+verify_download_integrity() {
+    local file_path="$1"
+    local integrity_key="$2"
+
+    [ -n "$integrity_key" ] || return 0
+    if ! load_integrity_map; then
+        return 1
+    fi
+
+    local expected
+    expected=$(expected_integrity_hash "$integrity_key")
+    expected=$(normalize_sha256 "$expected")
+    if [ -z "$expected" ]; then
+        err "Missing integrity entry for $integrity_key"
+        return 1
+    fi
+
+    local actual
+    if ! actual=$(sha256_file "$file_path"); then
+        return 1
+    fi
+    actual=$(normalize_sha256 "$actual")
+
+    if [ "$actual" != "$expected" ]; then
+        err "Integrity check failed for $integrity_key"
+        return 1
+    fi
+    return 0
+}
+
 ensure_ivlyrics_ready() {
     if [ ! -d "$IVLYRICS_APP" ]; then
         err "ivLyrics not found at $IVLYRICS_APP"
@@ -381,6 +495,17 @@ install_addon() {
         err "Failed to download $filename"
         return 1
     fi
+    local addon_integrity_key=""
+    case "$url" in
+        "$REPO_BASE"/*)
+            addon_integrity_key="$filename"
+            ;;
+    esac
+    if [ -n "$addon_integrity_key" ]; then
+        if ! verify_download_integrity "$dest" "$addon_integrity_key"; then
+            return 1
+        fi
+    fi
     ok "Downloaded → $dest"
 
     update_addon_source "$filename" "$url"
@@ -400,6 +525,9 @@ install_proxy() {
         info "Downloading cli-proxy/$rel ..."
         if ! curl -fsSL "$REPO_BASE/cli-proxy/$rel" -o "$dest"; then
             err "Failed to download cli-proxy/$rel"
+            return 1
+        fi
+        if ! verify_download_integrity "$dest" "cli-proxy/$rel"; then
             return 1
         fi
     done
