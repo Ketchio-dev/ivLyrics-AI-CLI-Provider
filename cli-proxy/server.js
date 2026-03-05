@@ -100,7 +100,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '3.1.0';
+const LOCAL_VERSION = '3.1.1';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -566,18 +566,6 @@ function shouldUseShellForCommand(commandPath) {
     return lower.endsWith('.cmd') || lower.endsWith('.bat');
 }
 
-/**
- * On Windows with shell: true, spawn concatenates args without escaping.
- * Wrap args containing whitespace in double quotes so cmd.exe keeps them intact.
- */
-function quoteArgsForShell(args, useShell) {
-    if (!useShell) return args;
-    return args.map(a => {
-        if (!/[\s"]/.test(a)) return a;
-        return '"' + a.replace(/"/g, '""') + '"';
-    });
-}
-
 function quoteArgForCmd(arg) {
     const value = String(arg);
     if (value === '') return '""';
@@ -637,17 +625,18 @@ function forceKillProcess(proc) {
 
 /**
  * npm이 생성한 .cmd 래퍼에서 실제 Node.js 엔트리 스크립트 경로를 추출.
- * %dp0% 또는 %~dp0% 기준 상대 경로로 .js/.cjs/.mjs 파일을 찾는다.
+ * %dp0%, %~dp0, %~dp0% 기준 상대 경로로 .js/.cjs/.mjs 파일을 찾는다.
  * 실패 시 빈 문자열 반환.
  */
 function extractCmdEntryScript(cmdPath) {
     try {
         const content = fs.readFileSync(cmdPath, 'utf8');
         const cmdDir = path.dirname(cmdPath);
-        const pattern = /"%(?:~?dp0)%[\\\/]([^"]+\.(?:js|cjs|mjs))"/gi;
+        const pattern = /"%(?:~?dp0%?)[\\\/]([^"]+\.(?:js|cjs|mjs))"/gi;
         let match;
         while ((match = pattern.exec(content)) !== null) {
-            const scriptPath = path.join(cmdDir, match[1]);
+            const relativeScriptPath = match[1].replace(/[\\\/]/g, path.sep);
+            const scriptPath = path.join(cmdDir, relativeScriptPath);
             if (fs.existsSync(scriptPath)) return scriptPath;
         }
     } catch {}
@@ -655,20 +644,17 @@ function extractCmdEntryScript(cmdPath) {
 }
 
 /**
- * Spawn a CLI command, handling Windows .cmd files with multi-line arguments.
+ * Spawn a CLI command, handling Windows .cmd files safely.
  *
- * cmd.exe cannot pass newlines inside arguments. When a multi-line arg is
- * detected on Windows, we first try to resolve the .cmd wrapper to its
- * underlying Node.js entry script and invoke it directly with node.exe,
- * bypassing cmd.exe entirely. Falls back to PowerShell temp file approach
- * if resolution fails.
+ * npm-generated .cmd shims are batch wrappers around a Node.js entry script.
+ * Invoking that script directly avoids cmd.exe quoting bugs with prompts that
+ * contain quotes or large multi-line payloads. If we cannot resolve the
+ * underlying script and a multi-line arg is present, fall back to a PowerShell
+ * temp-file bridge.
  */
 function spawnCLI(commandPath, args, options) {
     const useShell = shouldUseShellForCommand(commandPath);
-    const multilineIdx = useShell ? args.findIndex(a => /\n/.test(String(a))) : -1;
-
-    if (multilineIdx >= 0) {
-        // .cmd → cmd.exe → newlines in args are treated as command separators.
+    if (useShell) {
         const entryScript = extractCmdEntryScript(commandPath);
         if (entryScript) {
             return spawn(process.execPath, [entryScript, ...args], {
@@ -676,7 +662,10 @@ function spawnCLI(commandPath, args, options) {
                 shell: false,
             });
         }
+    }
 
+    const multilineIdx = useShell ? args.findIndex(a => /\n/.test(String(a))) : -1;
+    if (multilineIdx >= 0) {
         // Fallback: PowerShell temp file approach (may still truncate on some setups)
         const tmpFile = path.join(os.tmpdir(), `ivlyrics-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
         fs.writeFileSync(tmpFile, args[multilineIdx], 'utf8');
@@ -697,8 +686,7 @@ function spawnCLI(commandPath, args, options) {
     }
 
     if (useShell) {
-        const quoted = quoteArgsForShell(args, true);
-        return spawnWithCmdWrapper(commandPath, quoted, options);
+        return spawnWithCmdWrapper(commandPath, args, options);
     }
 
     return spawn(commandPath, args, options);
@@ -2364,5 +2352,6 @@ if (typeof module !== 'undefined') {
         resolveClaudeModel,
         extractCodexChunkFromEvent,
         parseCodexJsonOutput,
+        extractCmdEntryScript,
     };
 }

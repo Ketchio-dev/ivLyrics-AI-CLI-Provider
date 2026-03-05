@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
     isNewerVersion,
@@ -10,6 +13,7 @@ const {
     resolveClaudeModel,
     extractCodexChunkFromEvent,
     parseCodexJsonOutput,
+    extractCmdEntryScript,
 } = require('../server');
 
 test('isNewerVersion: patch bump is newer', () => {
@@ -134,4 +138,42 @@ test('parseCodexJsonOutput: empty input returns empty', () => {
 test('parseCodexJsonOutput: mixed non-JSON and JSON extracts valid', () => {
     const input = 'not-json\n{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n';
     assert.equal(parseCodexJsonOutput(input), 'ok');
+});
+
+test('extractCmdEntryScript: resolves npm cmd wrapper with %dp0% path', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ivlyrics-cmd-test-'));
+    const cmdDir = path.join(tempRoot, 'bin');
+    const cmdPath = path.join(cmdDir, 'gemini.cmd');
+    const scriptPath = path.join(tempRoot, 'gemini', 'dist', 'index.js');
+    fs.mkdirSync(cmdDir, { recursive: true });
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, '// test fixture\n', 'utf8');
+    fs.writeFileSync(
+        cmdPath,
+        '@ECHO off\r\n"%dp0%\\..\\gemini\\dist\\index.js" %*\r\n',
+        'utf8'
+    );
+
+    assert.equal(extractCmdEntryScript(cmdPath), scriptPath);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test('extractCmdEntryScript: resolves npm cmd wrapper with %~dp0 path', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ivlyrics-cmd-test-'));
+    const cmdDir = path.join(tempRoot, 'bin');
+    const cmdPath = path.join(cmdDir, 'gemini.cmd');
+    const scriptPath = path.join(tempRoot, 'gemini', 'dist', 'index.js');
+    fs.mkdirSync(cmdDir, { recursive: true });
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, '// test fixture\n', 'utf8');
+    fs.writeFileSync(
+        cmdPath,
+        '@ECHO off\r\n"%~dp0\\..\\gemini\\dist\\index.js" %*\r\n',
+        'utf8'
+    );
+
+    assert.equal(extractCmdEntryScript(cmdPath), scriptPath);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
 });
