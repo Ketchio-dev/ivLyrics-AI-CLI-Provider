@@ -213,6 +213,12 @@ function Ensure-Dir([string]$Path) {
     }
 }
 
+function Write-FileUtf8NoBom([string]$Path, [string]$Content) {
+    Ensure-Dir (Split-Path -Parent $Path)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 function Read-JsonMap([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) {
         return @{}
@@ -235,8 +241,7 @@ function Read-JsonMap([string]$Path) {
 }
 
 function Write-JsonMap([string]$Path, [hashtable]$Map) {
-    Ensure-Dir (Split-Path -Parent $Path)
-    (($Map | ConvertTo-Json -Depth 20) + "`n") | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-FileUtf8NoBom -Path $Path -Content (($Map | ConvertTo-Json -Depth 20) + "`n")
 }
 
 function Remove-AddonSourceAt([string]$SourcesPath, [string]$Filename) {
@@ -270,7 +275,7 @@ function Remove-ManifestEntryAt([string]$ManifestPath, [string]$Entry) {
         return
     }
     $manifestObj.subfiles_extension = $filtered
-    (($manifestObj | ConvertTo-Json -Depth 100) + "`n") | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+    Write-FileUtf8NoBom -Path $ManifestPath -Content (($manifestObj | ConvertTo-Json -Depth 100) + "`n")
     Write-Ok "Removed manifest entry: $Entry ($ManifestPath)"
 }
 

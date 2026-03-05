@@ -12,7 +12,7 @@
         "cli-proxy/README.md": "sha256-f5afe9a347dc17d4cea17668b4a37ab5effc1cdb7a988b4453faed8236d1dc3c",
         "cli-proxy/spotify-with-proxy.sh": "sha256-4d9242911f10cb802126651b61ca388c01b3dac7d84e1aba0e5082297b96a1f6",
         "cli-proxy/spotify-with-proxy.ps1": "sha256-b3d85f37c7d84c366cb4f38fabc09343232ac936cf88b4ced97a3eee43757740",
-        "install.ps1": "sha256-f025e9a365381264fafd65af7ce1a2d130ded35d0cf0314e8db3dcac7c7dc889",
+        "install.ps1": "sha256-56796e2b40dee4e80690c0add32f6eb1184b7f6c41a1503378030d61b5a8ecc7",
         "install.sh": "sha256-76ae0cbdb7384f138f365f3ad2946584672f5d90b850d550be05666bdc6b8045",
         "manifest.json": "sha256-913eb6b03e55fef3569393bc8c07788dd275051dc61c8f82c350b07765ada9d8"
     }

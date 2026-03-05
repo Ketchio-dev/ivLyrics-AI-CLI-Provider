@@ -160,6 +160,12 @@ function Ensure-Dir([string]$Path) {
     }
 }
 
+function Write-FileUtf8NoBom([string]$Path, [string]$Content) {
+    Ensure-Dir (Split-Path -Parent $Path)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 function Normalize-Sha256([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return ""
@@ -249,8 +255,7 @@ function Read-JsonMap([string]$Path) {
 }
 
 function Write-JsonMap([string]$Path, [hashtable]$Map) {
-    Ensure-Dir (Split-Path -Parent $Path)
-    (($Map | ConvertTo-Json -Depth 20) + "`n") | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-FileUtf8NoBom -Path $Path -Content (($Map | ConvertTo-Json -Depth 20) + "`n")
 }
 
 function Ensure-ManifestEntry([string]$Entry) {
@@ -267,7 +272,7 @@ function Ensure-ManifestEntry([string]$Entry) {
         return
     }
     $manifestObj.subfiles_extension = @($Entry) + $current
-    (($manifestObj | ConvertTo-Json -Depth 100) + "`n") | Set-Content -LiteralPath $Manifest -Encoding UTF8
+    Write-FileUtf8NoBom -Path $Manifest -Content (($manifestObj | ConvertTo-Json -Depth 100) + "`n")
     Write-Ok "Registered `"$Entry`" in manifest.json"
 }
 
@@ -303,7 +308,7 @@ function Remove-ManifestEntry([string]$Entry) {
         return
     }
     $manifestObj.subfiles_extension = @($current | Where-Object { $_ -ne $Entry })
-    (($manifestObj | ConvertTo-Json -Depth 100) + "`n") | Set-Content -LiteralPath $Manifest -Encoding UTF8
+    Write-FileUtf8NoBom -Path $Manifest -Content (($manifestObj | ConvertTo-Json -Depth 100) + "`n")
     Write-Ok "Removed `"$Entry`" from manifest.json"
     $script:DidAddonInstall = $true
 }
