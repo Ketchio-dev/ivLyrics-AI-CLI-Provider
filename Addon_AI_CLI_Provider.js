@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 3.1.0
+ * @version 3.1.3
  */
 
 (() => {
@@ -333,7 +333,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                         'Content-Type': 'application/json',
                         'X-IVLYRICS-Action': 'update'
                     },
-                    body: JSON.stringify({ target: 'proxy' })
+                    body: JSON.stringify({ action: 'update', target: 'proxy' })
                 });
                 if (!response.ok) {
                     const err = await response.json().catch(() => ({}));
@@ -477,6 +477,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
 
             const cleanupUrl = `${proxyUrl}/cleanup`;
             const payload = JSON.stringify({
+                action: 'cleanup',
                 target: 'proxy',
                 confirm: 'REMOVE_PROXY'
             });
@@ -563,7 +564,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description: resolvedDescription,
-            version: '3.1.0',
+            version: '3.1.3',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -1023,7 +1024,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                     'Content-Type': 'application/json',
                                     'X-IVLYRICS-Action': 'update'
                                 },
-                                body: JSON.stringify({ target: 'all' })
+                                body: JSON.stringify({ action: 'update', target: 'all' })
                             });
                             if (!response.ok) {
                                 const err = await response.json().catch(() => ({}));

@@ -14,6 +14,7 @@ const {
     extractCodexChunkFromEvent,
     parseCodexJsonOutput,
     extractCmdEntryScript,
+    resolveAdminActionToken,
 } = require('../server');
 
 test('isNewerVersion: patch bump is newer', () => {
@@ -138,6 +139,18 @@ test('parseCodexJsonOutput: empty input returns empty', () => {
 test('parseCodexJsonOutput: mixed non-JSON and JSON extracts valid', () => {
     const input = 'not-json\n{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n';
     assert.equal(parseCodexJsonOutput(input), 'ok');
+});
+
+test('resolveAdminActionToken: header wins over body action', () => {
+    assert.equal(resolveAdminActionToken('update', 'cleanup'), 'update');
+});
+
+test('resolveAdminActionToken: falls back to body action', () => {
+    assert.equal(resolveAdminActionToken('', 'cleanup'), 'cleanup');
+});
+
+test('resolveAdminActionToken: normalizes case and whitespace', () => {
+    assert.equal(resolveAdminActionToken('  UPDATE ', ''), 'update');
 });
 
 test('extractCmdEntryScript: resolves npm cmd wrapper with %dp0% path', () => {

@@ -100,7 +100,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '3.1.2';
+const LOCAL_VERSION = '3.1.3';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -321,13 +321,19 @@ function requireAdminRequestGuard(req, res, next) {
 
     if (origin) {
         const expectedAction = req.path === '/cleanup' ? 'cleanup' : 'update';
-        const receivedAction = normalizeModelId(req.headers[ADMIN_ACTION_HEADER] || '').toLowerCase();
-        if (receivedAction !== expectedAction) {
+        const receivedAction = resolveAdminActionToken(req.headers[ADMIN_ACTION_HEADER], req.body?.action);
+        if (receivedAction && receivedAction !== expectedAction) {
             return res.status(400).json({ error: `Missing or invalid ${ADMIN_ACTION_HEADER} header` });
         }
     }
 
     return next();
+}
+
+function resolveAdminActionToken(headerValue, bodyActionValue) {
+    const headerAction = normalizeModelId(headerValue || '').toLowerCase();
+    if (headerAction) return headerAction;
+    return normalizeModelId(bodyActionValue || '').toLowerCase();
 }
 
 // Chromium Private Network Access (PNA) 지원
@@ -2356,5 +2362,6 @@ if (typeof module !== 'undefined') {
         extractCodexChunkFromEvent,
         parseCodexJsonOutput,
         extractCmdEntryScript,
+        resolveAdminActionToken,
     };
 }
