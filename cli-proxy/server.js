@@ -100,7 +100,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '3.1.3';
+const LOCAL_VERSION = '3.1.4';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -1175,12 +1175,19 @@ function discoverGeminiModels() {
         }
     }
 
-    addModelToMap(map, CLI_TOOLS.gemini.defaultModel, 'proxy-default');
+    return finalizeGeminiModelDiscovery(map, CLI_TOOLS.gemini.defaultModel);
+}
 
+function finalizeGeminiModelDiscovery(modelMap, defaultModel) {
+    const discoveredModels = new Map(modelMap);
+    const discoveredCount = discoveredModels.size;
+    if (discoveredCount > 0) {
+        addModelToMap(discoveredModels, defaultModel, 'proxy-default');
+    }
     return {
-        defaultModel: CLI_TOOLS.gemini.defaultModel || '',
-        models: sortModels(Array.from(map.values())),
-        source: map.size > 1 ? 'gemini-history' : 'fallback'
+        defaultModel: defaultModel || '',
+        models: discoveredCount > 0 ? sortModels(Array.from(discoveredModels.values())) : [],
+        source: discoveredCount > 0 ? 'gemini-history' : 'fallback'
     };
 }
 
@@ -2363,5 +2370,6 @@ if (typeof module !== 'undefined') {
         parseCodexJsonOutput,
         extractCmdEntryScript,
         resolveAdminActionToken,
+        finalizeGeminiModelDiscovery,
     };
 }

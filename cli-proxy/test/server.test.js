@@ -15,6 +15,7 @@ const {
     parseCodexJsonOutput,
     extractCmdEntryScript,
     resolveAdminActionToken,
+    finalizeGeminiModelDiscovery,
 } = require('../server');
 
 test('isNewerVersion: patch bump is newer', () => {
@@ -107,6 +108,33 @@ test('resolveGeminiModel: empty model returns fallback', () => {
 
 test('resolveGeminiModel: valid model passes through', () => {
     assert.equal(resolveGeminiModel('gemini-2.0-flash', 'gemini-2.5-flash'), 'gemini-2.0-flash');
+});
+
+test('finalizeGeminiModelDiscovery: empty history returns fallback with no models', () => {
+    assert.deepEqual(
+        finalizeGeminiModelDiscovery(new Map(), 'gemini-2.5-flash'),
+        {
+            defaultModel: 'gemini-2.5-flash',
+            models: [],
+            source: 'fallback'
+        }
+    );
+});
+
+test('finalizeGeminiModelDiscovery: discovered history keeps models and includes default', () => {
+    const payload = finalizeGeminiModelDiscovery(
+        new Map([
+            ['gemini-2.5-pro', { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', source: 'gemini-history' }]
+        ]),
+        'gemini-2.5-flash'
+    );
+
+    assert.equal(payload.defaultModel, 'gemini-2.5-flash');
+    assert.equal(payload.source, 'gemini-history');
+    assert.deepEqual(
+        payload.models.map(model => model.id),
+        ['gemini-2.5-flash', 'gemini-2.5-pro']
+    );
 });
 
 test('extractCodexChunkFromEvent: agent_message item.completed returns text', () => {
