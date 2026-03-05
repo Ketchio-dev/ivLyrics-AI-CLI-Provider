@@ -54,8 +54,8 @@ const PORT = process.env.PORT || 19284;
 // ============================================
 
 const DEFAULT_TIMEOUT_MS = 120000;        // Default CLI process timeout
-const TOOL_CHECK_TIMEOUT_MS = 30000;      // Tool availability check timeout (spawnSync)
-const HEALTH_CHECK_TIMEOUT_MS = 12000;    // Per-tool timeout in /health endpoint
+const TOOL_CHECK_TIMEOUT_MS = 15000;      // Tool availability check timeout (async spawn)
+const TOOL_CACHE_TTL_MS = 300000;         // Tool availability cache lifetime (5 minutes)
 const RATE_LIMIT_WINDOW_MS = 60000;       // Rate limit window (1 minute)
 const RATE_LIMIT_MAX_REQUESTS = 120;      // Max /generate requests per window
 const UPDATE_CACHE_MAX_SIZE = 1048576;    // 1MB — skip cache if result is larger
@@ -767,56 +767,101 @@ const CLI_TOOLS = {
 // Helper Functions
 // ============================================
 
-/**
- * 도구 사용 가능 여부 확인
- */
-async function checkToolAvailable(toolId) {
+const toolAvailabilityCache = new Map();
+let lastToolCheckTime = 0;
+let toolCheckInProgress = false;
+
+function checkToolAvailable(toolId) {
     const tool = CLI_TOOLS[toolId];
-    if (!tool) return { available: false, error: 'Unknown tool' };
+    if (!tool) return Promise.resolve({ available: false, error: 'Unknown tool' });
 
-    try {
-        const commandPath = resolveCommandPath(tool.command);
-        if (!commandPath) {
-            return {
-                available: false,
-                error:
-                    `${tool.command} executable not found. ` +
-                    `Install: ${tool.installUrl} — then ensure it's in your PATH and restart Spotify/terminal.`
-            };
-        }
-        const useShell = shouldUseShellForCommand(commandPath);
-        const checkArgs = quoteArgsForShell(getCliCheckArgs(tool), useShell);
-        const spawnOptions = {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            encoding: 'utf8',
-            timeout: TOOL_CHECK_TIMEOUT_MS,
-            env: { ...process.env, NO_COLOR: '1' },
-            windowsHide: true,
-        };
-        const result = useShell
-            ? spawnSyncWithCmdWrapper(commandPath, checkArgs, spawnOptions)
-            : spawnSync(commandPath, checkArgs, { ...spawnOptions, shell: false });
-
-        if (result.error) {
-            return {
-                available: false,
-                error: `${tool.command} check failed: ${result.error.message}`
-            };
-        }
-        if (result.status !== 0) {
-            const detail =
-                normalizeModelId(result.stderr) ||
-                normalizeModelId(result.stdout) ||
-                `exit code ${result.status}`;
-            return {
-                available: false,
-                error: `${tool.command} is installed but check command failed: ${detail}`
-            };
-        }
-        return { available: true };
-    } catch (e) {
-        return { available: false, error: `${tool.command} availability check failed: ${e.message}` };
+    const commandPath = resolveCommandPath(tool.command);
+    if (!commandPath) {
+        return Promise.resolve({
+            available: false,
+            error:
+                `${tool.command} executable not found. ` +
+                `Install: ${tool.installUrl} — then ensure it's in your PATH and restart Spotify/terminal.`
+        });
     }
+
+    const useShell = shouldUseShellForCommand(commandPath);
+    const checkArgs = quoteArgsForShell(getCliCheckArgs(tool), useShell);
+    const spawnOptions = {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: os.tmpdir(),
+        env: { ...process.env, NO_COLOR: '1' },
+        windowsHide: true,
+    };
+
+    return new Promise((resolve) => {
+        let settled = false;
+        const proc = useShell
+            ? spawnWithCmdWrapper(commandPath, checkArgs, spawnOptions)
+            : spawn(commandPath, checkArgs, { ...spawnOptions, shell: false });
+
+        let stdout = '';
+        let stderr = '';
+
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            forceKillProcess(proc);
+            resolve({ available: true, note: `${tool.command} found but version check timed out` });
+        }, TOOL_CHECK_TIMEOUT_MS);
+
+        proc.stdout.on('data', (data) => { stdout += data.toString(); });
+        proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+        proc.on('close', (code) => {
+            clearTimeout(timer);
+            if (settled) return;
+            settled = true;
+            if (code === 0) {
+                resolve({ available: true });
+            } else {
+                const detail =
+                    normalizeModelId(stderr) ||
+                    normalizeModelId(stdout) ||
+                    `exit code ${code}`;
+                resolve({
+                    available: false,
+                    error: `${tool.command} is installed but check command failed: ${detail}`
+                });
+            }
+        });
+
+        proc.on('error', (err) => {
+            clearTimeout(timer);
+            if (settled) return;
+            settled = true;
+            resolve({ available: false, error: `${tool.command} check failed: ${err.message}` });
+        });
+    });
+}
+
+async function refreshToolCache() {
+    if (toolCheckInProgress) return;
+    toolCheckInProgress = true;
+    try {
+        const toolIds = Object.keys(CLI_TOOLS);
+        const results = await Promise.allSettled(
+            toolIds.map(toolId => checkToolAvailable(toolId))
+        );
+        toolIds.forEach((toolId, i) => {
+            const status = results[i].status === 'fulfilled'
+                ? results[i].value
+                : { available: false, error: results[i].reason?.message || 'Check failed' };
+            toolAvailabilityCache.set(toolId, status);
+        });
+        lastToolCheckTime = Date.now();
+    } finally {
+        toolCheckInProgress = false;
+    }
+}
+
+function getCachedToolStatus(toolId) {
+    return toolAvailabilityCache.get(toolId) || { available: false, error: 'Checking...' };
 }
 
 /**
@@ -1508,26 +1553,15 @@ function runToolStream(toolId, prompt, model, timeout, res) {
 /**
  * 헬스 체크 & 사용 가능한 도구 목록
  */
-app.get('/health', async (req, res) => {
-    const toolIds = Object.keys(CLI_TOOLS);
-    const results = await Promise.allSettled(
-        toolIds.map(toolId =>
-            Promise.race([
-                checkToolAvailable(toolId),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Health check timed out')), HEALTH_CHECK_TIMEOUT_MS)
-                )
-            ])
-        )
-    );
+app.get('/health', (req, res) => {
+    if (Date.now() - lastToolCheckTime > TOOL_CACHE_TTL_MS) {
+        refreshToolCache().catch(() => {});
+    }
 
     const tools = {};
-    toolIds.forEach((toolId, i) => {
-        const status = results[i].status === 'fulfilled'
-            ? results[i].value
-            : { available: false, error: results[i].reason?.message || 'Check failed' };
-        tools[toolId] = { ...status, mode: CLI_TOOLS[toolId].mode };
-    });
+    for (const toolId of Object.keys(CLI_TOOLS)) {
+        tools[toolId] = { ...getCachedToolStatus(toolId), mode: CLI_TOOLS[toolId].mode };
+    }
 
     const updateInfo = updateCache.data || {};
     res.json({
@@ -1542,10 +1576,10 @@ app.get('/health', async (req, res) => {
 /**
  * 사용 가능한 도구 목록
  */
-app.get('/tools', async (req, res) => {
+app.get('/tools', (req, res) => {
     const tools = [];
     for (const toolId of Object.keys(CLI_TOOLS)) {
-        const status = await checkToolAvailable(toolId);
+        const status = getCachedToolStatus(toolId);
         tools.push({
             id: toolId,
             name: CLI_TOOLS[toolId].command,
@@ -2089,17 +2123,18 @@ if (require.main === module) {
         console.log(`   POST /v1/chat/completions - OpenAI-compatible endpoint`);
         console.log(`\n🔧 Checking available tools...`);
 
-        Promise.allSettled(
-            Object.keys(CLI_TOOLS).map(async (toolId) => {
+        refreshToolCache().then(() => {
+            for (const toolId of Object.keys(CLI_TOOLS)) {
                 const tool = CLI_TOOLS[toolId];
-                const status = await checkToolAvailable(toolId);
+                const status = getCachedToolStatus(toolId);
                 const icon = status.available ? '✓' : '✗';
-                const modeTag = '[CLI]';
-                console.log(`   ${icon} ${toolId} ${modeTag}: ${status.available ? 'available' : status.error} (default: ${tool.defaultModel || 'auto'})`);
-            })
-        ).then(() => {
+                const detail = status.available
+                    ? (status.note ? `available (${status.note})` : 'available')
+                    : status.error;
+                console.log(`   ${icon} ${toolId} [CLI]: ${detail} (default: ${tool.defaultModel || 'auto'})`);
+            }
             console.log('');
-        });
+        }).catch(() => {});
 
         // Async update check on startup
         checkForUpdates().then((result) => {
