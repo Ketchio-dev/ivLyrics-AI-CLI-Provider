@@ -64,7 +64,7 @@ winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreeme
 Expected output:
 
 ```
-🚀 ivLyrics CLI Proxy Server v3.1.0
+🚀 ivLyrics CLI Proxy Server v1.0.0
    Running on http://127.0.0.1:19284
 ```
 

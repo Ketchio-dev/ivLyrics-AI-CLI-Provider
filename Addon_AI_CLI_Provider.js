@@ -3,7 +3,7 @@
  * Claude Code, Gemini CLI, Codex CLI를 프록시 서버를 통해 사용
  *
  * @author Ketchio-dev
- * @version 3.1.5
+ * @version 1.0.0
  */
 
 (() => {
@@ -20,10 +20,23 @@
     const AUTO_PROXY_UPDATE_STATE_KEY = '__ivLyricsCliProviderAutoProxyUpdateState';
     const AUTO_PROXY_UPDATE_LAST_TS_KEY = 'ivlyrics-cli-provider:auto-proxy-update-last-ts';
     const MAX_REGISTER_RETRIES = 100;
+    const GEMINI_KNOWN_MODELS = Object.freeze([
+        'gemini-3-pro-preview',
+        'gemini-3-flash-preview',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+    ]);
     const GEMINI_MODEL_ALIAS_MAP = Object.freeze({
+        '3.0-pro': 'gemini-3-pro-preview',
+        '3-pro': 'gemini-3-pro-preview',
+        '3-pro-preview': 'gemini-3-pro-preview',
         '3.0-flash': 'gemini-3-flash-preview',
         '3-flash': 'gemini-3-flash-preview',
         '3-flash-preview': 'gemini-3-flash-preview',
+        'gemini-3.0-pro': 'gemini-3-pro-preview',
+        'gemini-3-pro': 'gemini-3-pro-preview',
+        'gemini-3.0-pro-preview': 'gemini-3-pro-preview',
         'gemini-3.0-flash': 'gemini-3-flash-preview',
         'gemini-3-flash': 'gemini-3-flash-preview',
         'gemini-3.0-flash-preview': 'gemini-3-flash-preview',
@@ -396,19 +409,11 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 'zh-CN': '通过代理服务器使用 Google Gemini CLI',
             },
             toolId: 'gemini',
-            fallbackModels: [
-                { id: 'gemini-3.0-flash', name: 'gemini-3.0-flash' },
-                { id: 'gemini-3-flash-preview', name: 'gemini-3-flash-preview' },
-                { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro' },
-                { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash' },
-                { id: 'gemini-2.0-flash', name: 'gemini-2.0-flash' },
-                { id: 'gemini-1.5-pro', name: 'gemini-1.5-pro' },
-                { id: 'gemini-1.5-flash', name: 'gemini-1.5-flash' }
-            ],
+            fallbackModels: GEMINI_KNOWN_MODELS.map(modelId => ({ id: modelId, name: modelId })),
             safeDefaultModel: '',
             isBlockedModel: () => false,
             useCopyrightNotice: false,
-            customModelPlaceholder: 'e.g., gemini-3.0-flash',
+            customModelPlaceholder: 'e.g., gemini-3-pro-preview',
         },
         {
             id: 'cli-codex',
@@ -564,7 +569,7 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
             name,
             author: 'Ketchio-dev',
             description: resolvedDescription,
-            version: '3.1.5',
+            version: '1.0.0',
             supports: { translate: true, metadata: true, tmi: true }
         };
 
@@ -612,6 +617,19 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 const modelMap = new Map();
+                const seedModels = toolId === 'gemini' ? fallbackModels : [];
+                seedModels
+                    .map(model => {
+                        if (typeof model === 'string') return { id: model.trim(), name: model.trim() };
+                        const rawId = (model?.id || '').toString().trim();
+                        const mid = toolId === 'gemini' ? (normalizeGeminiModelId(rawId) || rawId) : rawId;
+                        const mname = (model?.name || mid).toString().trim();
+                        return { id: mid, name: mname };
+                    })
+                    .filter(m => m.id && !isBlockedModel(m.id))
+                    .forEach(m => {
+                        if (!modelMap.has(m.id)) modelMap.set(m.id, m);
+                    });
                 (Array.isArray(data.models) ? data.models : [])
                     .map(model => {
                         if (typeof model === 'string') return { id: model.trim(), name: model.trim() };
@@ -1182,9 +1200,9 @@ IMPORTANT: The output MUST be in ${langInfo.name} (${langInfo.native}).
                                 null,
                                 availableModels.length > 0
                                     ? (resolvedSource
-                                        ? `Select a CLI-discovered model (source: ${resolvedSource}, proxy default: ${resolvedModel || 'n/a'}).`
-                                        : `Select a CLI-discovered model (proxy default: ${resolvedModel || 'n/a'}).`)
-                                    : 'No discovered models yet. Proxy may not be running. Run setup command, keep terminal open, then click refresh.'
+                                        ? `Select a model from the proxy/catalog (source: ${resolvedSource}, proxy default: ${resolvedModel || 'n/a'}).`
+                                        : `Select a model from the proxy/catalog (proxy default: ${resolvedModel || 'n/a'}).`)
+                                    : 'No models resolved yet. Proxy may not be running. Run setup command, keep terminal open, then click refresh.'
                             )
                         ),
 

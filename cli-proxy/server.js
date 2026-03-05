@@ -100,7 +100,7 @@ console.error = (...args) => { _consoleError(...args); writeLog('ERROR', args); 
 // Version & Auto-Update
 // ============================================
 
-const LOCAL_VERSION = '3.1.4';
+const LOCAL_VERSION = '1.0.0';
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/version.json';
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main';
 
@@ -393,10 +393,23 @@ function checkRateLimit(req) {
 // ============================================
 
 const GEMINI_DEFAULT_MODEL = 'gemini-2.5-flash';
+const GEMINI_KNOWN_MODELS = Object.freeze([
+    'gemini-3-pro-preview',
+    'gemini-3-flash-preview',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+]);
 const GEMINI_MODEL_ALIAS_MAP = Object.freeze({
+    '3.0-pro': 'gemini-3-pro-preview',
+    '3-pro': 'gemini-3-pro-preview',
+    '3-pro-preview': 'gemini-3-pro-preview',
     '3.0-flash': 'gemini-3-flash-preview',
     '3-flash': 'gemini-3-flash-preview',
     '3-flash-preview': 'gemini-3-flash-preview',
+    'gemini-3.0-pro': 'gemini-3-pro-preview',
+    'gemini-3-pro': 'gemini-3-pro-preview',
+    'gemini-3.0-pro-preview': 'gemini-3-pro-preview',
     'gemini-3.0-flash': 'gemini-3-flash-preview',
     'gemini-3-flash': 'gemini-3-flash-preview',
     'gemini-3.0-flash-preview': 'gemini-3-flash-preview',
@@ -1154,6 +1167,11 @@ function discoverClaudeModels() {
 
 function discoverGeminiModels() {
     const map = new Map();
+    for (const modelId of GEMINI_KNOWN_MODELS) {
+        addModelToMap(map, modelId, 'gemini-cli-catalog');
+    }
+
+    let hasHistoryModels = false;
     const geminiTmpDir = path.join(os.homedir(), '.gemini', 'tmp');
     const jsonFiles = walkDirSafe(geminiTmpDir, [], 600);
 
@@ -1171,14 +1189,19 @@ function discoverGeminiModels() {
             const modelId = normalizeGeminiModel(match[1]);
             if (modelId.startsWith('gemini-')) {
                 addModelToMap(map, modelId, 'gemini-history');
+                hasHistoryModels = true;
             }
         }
     }
 
-    return finalizeGeminiModelDiscovery(map, CLI_TOOLS.gemini.defaultModel);
+    return finalizeGeminiModelDiscovery(
+        map,
+        CLI_TOOLS.gemini.defaultModel,
+        hasHistoryModels ? 'gemini-history+catalog' : 'gemini-cli-catalog'
+    );
 }
 
-function finalizeGeminiModelDiscovery(modelMap, defaultModel) {
+function finalizeGeminiModelDiscovery(modelMap, defaultModel, source = '') {
     const discoveredModels = new Map(modelMap);
     const discoveredCount = discoveredModels.size;
     if (discoveredCount > 0) {
@@ -1187,7 +1210,7 @@ function finalizeGeminiModelDiscovery(modelMap, defaultModel) {
     return {
         defaultModel: defaultModel || '',
         models: discoveredCount > 0 ? sortModels(Array.from(discoveredModels.values())) : [],
-        source: discoveredCount > 0 ? 'gemini-history' : 'fallback'
+        source: discoveredCount > 0 ? (source || 'gemini-history') : 'fallback'
     };
 }
 

@@ -98,6 +98,10 @@ test('normalizeGeminiModel: dotted alias resolves via map', () => {
     assert.equal(normalizeGeminiModel('gemini-3.0-flash'), 'gemini-3-flash-preview');
 });
 
+test('normalizeGeminiModel: pro alias resolves via map', () => {
+    assert.equal(normalizeGeminiModel('3-pro'), 'gemini-3-pro-preview');
+});
+
 test('normalizeGeminiModel: empty returns empty', () => {
     assert.equal(normalizeGeminiModel(''), '');
 });
@@ -134,6 +138,23 @@ test('finalizeGeminiModelDiscovery: discovered history keeps models and includes
     assert.deepEqual(
         payload.models.map(model => model.id),
         ['gemini-2.5-flash', 'gemini-2.5-pro']
+    );
+});
+
+test('finalizeGeminiModelDiscovery: explicit catalog source is preserved', () => {
+    const payload = finalizeGeminiModelDiscovery(
+        new Map([
+            ['gemini-3-pro-preview', { id: 'gemini-3-pro-preview', name: 'gemini-3-pro-preview', source: 'gemini-cli-catalog' }]
+        ]),
+        'gemini-2.5-flash',
+        'gemini-cli-catalog'
+    );
+
+    assert.equal(payload.defaultModel, 'gemini-2.5-flash');
+    assert.equal(payload.source, 'gemini-cli-catalog');
+    assert.deepEqual(
+        payload.models.map(model => model.id),
+        ['gemini-2.5-flash', 'gemini-3-pro-preview']
     );
 });
 
