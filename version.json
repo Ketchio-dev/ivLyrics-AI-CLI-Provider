@@ -2,18 +2,24 @@
     "schemaVersion": 2,
     "proxy": { "version": "1.0.0" },
     "addons": {
-        "Addon_AI_CLI_Provider.js": { "version": "1.0.0", "id": "cli-claude" }
+        "Addon_AI_CLI_Provider.js": { "version": "1.0.0", "id": "cli-claude" },
+        "Addon_AI_FreeAIprovider.js": { "version": "0.2.0", "id": "freeaiprovider" }
     },
     "integrity": {
         "Addon_AI_CLI_Provider.js": "sha256-55b8b038fc687419a8b091120001580de4eaa208c0b0f13d93ed08e5f968d238",
+        "Addon_AI_FreeAIprovider.js": "sha256-38242bec49f792af4fd51ddde2822586b481b53c1b32b7fba8eb9fe84768c23c",
         "cli-proxy/server.js": "sha256-0bec027bc679864738b27f3e31221e6e188dc892f4beb644bba2862a705e1acd",
         "cli-proxy/package.json": "sha256-3f2582ccb87173a8ab9636921c2a989c95e6baf60c58bd8c35805ea455afc979",
         "cli-proxy/package-lock.json": "sha256-e1b3771eec4a73952531f880e3c7df075fad7637d47dcf59a8c0d3febde650be",
         "cli-proxy/README.md": "sha256-f5afe9a347dc17d4cea17668b4a37ab5effc1cdb7a988b4453faed8236d1dc3c",
+        "freeai-bridge/server.js": "sha256-5426077caea1dc6f7814e2c141d900d7fb2c6e68f289171bd52e1089155376e6",
+        "freeai-bridge/package.json": "sha256-bf76baf8bb1f02aefcfc8f03909b4acfd8269d785aafe650cd659ccacf03664d",
+        "freeai-bridge/README.md": "sha256-54a4c2981656bbb69a528137e8d00429c9bca6b319b5cf46fec973df77e4dcbb",
+        "freeai-bridge/providers.example.json": "sha256-4f343830d9b01d34a0ab8dded11c03636459d929fd3d8e689bddc2288bab91a0",
         "cli-proxy/spotify-with-proxy.sh": "sha256-4d9242911f10cb802126651b61ca388c01b3dac7d84e1aba0e5082297b96a1f6",
         "cli-proxy/spotify-with-proxy.ps1": "sha256-b3d85f37c7d84c366cb4f38fabc09343232ac936cf88b4ced97a3eee43757740",
         "install.ps1": "sha256-56796e2b40dee4e80690c0add32f6eb1184b7f6c41a1503378030d61b5a8ecc7",
         "install.sh": "sha256-76ae0cbdb7384f138f365f3ad2946584672f5d90b850d550be05666bdc6b8045",
-        "manifest.json": "sha256-2b33e92922a8164dadd914ae33e2910b0a36ca8fcf9e4bcb0020d31ae59952bb"
+        "manifest.json": "sha256-96ceb0109c20ffd18e92a9a66f123db320c5c3e2d1ee8de7ae340d5cbb148fb8"
     }
 }

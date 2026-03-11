@@ -1,0 +1,18 @@
+{
+  "name": "freeai-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Local browser-automation bridge for ivLyrics Web AI Provider",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "start:bg": "node start-background.js",
+    "stop:bg": "node stop-background.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "playwright": "^1.52.0"
+  }
+}

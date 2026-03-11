@@ -1,0 +1,21 @@
+{
+  "chatgpt": {
+    "appUrl": "https://chatgpt.com/",
+    "loginUrl": "https://chatgpt.com/",
+    "composerSelectors": [
+      "#prompt-textarea",
+      "textarea",
+      "[contenteditable='true']",
+      "div[role='textbox']"
+    ],
+    "submitSelectors": [
+      "button[data-testid='send-button']",
+      "button[aria-label*='Send']",
+      "button[type='submit']"
+    ],
+    "responseSelectors": [
+      "[data-message-author-role='assistant']",
+      "article [data-message-author-role='assistant']"
+    ]
+  }
+}
