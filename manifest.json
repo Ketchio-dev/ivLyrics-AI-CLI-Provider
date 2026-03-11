@@ -10,16 +10,6 @@
       "preview": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/previews/all_cli_provider.png",
       "downloadUrl": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_CLI_Provider.js",
       "minAppVersion": "4.0.0"
-    },
-    {
-      "name": "Web AI Provider (ChatGPT + Gemini)",
-      "type": "ai",
-      "version": "0.2.0",
-      "updated": "2026-03-11",
-      "description": "Experimental local bridge addon that automates ChatGPT and Gemini web sessions for ivLyrics",
-      "githubUrl": "https://github.com/Ketchio-dev/ivLyrics-AI-CLI-Provider",
-      "downloadUrl": "https://raw.githubusercontent.com/Ketchio-dev/ivLyrics-AI-CLI-Provider/main/Addon_AI_FreeAIprovider.js",
-      "minAppVersion": "4.0.0"
     }
   ]
 }

@@ -1,51 +1,11 @@
-# ivLyrics AI Provider Addons
+# ivLyrics AI CLI Provider Addons
 
-AI provider addons for [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics).
-로컬 CLI 도구 또는 웹 자동화 브리지를 통해 ivLyrics 번역/메타데이터/TMI 기능에 연결합니다.
+AI CLI Provider addons for [ivLyrics](https://github.com/ivLis-STUDIO/ivLyrics).
+로컬 AI CLI 도구를 프록시 서버를 통해 ivLyrics 번역/메타데이터/TMI 기능에 연결합니다.
 
-| Addon | Backend |
-|-------|---------|
+| Addon | CLI Tool |
+|-------|----------|
 | `Addon_AI_CLI_Provider.js` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) + [Codex CLI](https://github.com/openai/codex) + [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
-| `Addon_AI_FreeAIprovider.js` | Local browser bridge over ChatGPT Web + Gemini Web |
-
-## Web AI Provider
-
-`Addon_AI_FreeAIprovider.js` is an experimental provider for users who want to reuse existing ChatGPT/Gemini web sessions instead of API keys.
-
-Current scope:
-
-- ChatGPT web
-- Gemini web
-- Translation and pronunciation
-- Local bridge required
-
-Bridge package:
-
-- [freeai-bridge/README.md](freeai-bridge/README.md)
-
-Quick start:
-
-```bash
-cd freeai-bridge
-npm install
-npx playwright install chromium
-npm run start:bg
-```
-
-Then in ivLyrics:
-
-1. Enable `Web AI Provider (ChatGPT + Gemini)`.
-2. Open the addon settings.
-3. Choose `ChatGPT` or `Gemini`.
-4. Click `Open Login Window`.
-5. Sign in.
-6. Click `Save Session`.
-
-Notes:
-
-- This addon is experimental and depends on live web UI selectors.
-- Unexpected popups, captchas, or UI redesigns can break automation.
-- Failure screenshots are saved under `output/playwright/`.
 
 ## Quick Install
 
